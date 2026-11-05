@@ -196,6 +196,10 @@ async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
     let conflict = request(&app, "POST", "/v1/streams/a/events", Some("secret"), stale).await;
     assert_eq!(conflict.0, StatusCode::CONFLICT);
     assert_eq!(conflict.1["error"]["code"], "wrong_expected_revision");
+    assert_eq!(
+        conflict.1["error"]["details"],
+        json!({"expected": -1, "actual": 0})
+    );
     let (_, read) = request(
         &app,
         "GET",

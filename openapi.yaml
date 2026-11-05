@@ -160,7 +160,7 @@ components:
     Limit:
       name: limit
       in: query
-      description: Maximum events per page or subscription database fetch.
+      description: Maximum events per page or subscription database fetch. A soft 4 MiB event-content budget can produce a shorter page; a single larger event is still returned.
       schema:
         type: integer
         minimum: 1
@@ -253,6 +253,7 @@ components:
             $ref: '#/components/schemas/Event'
         next_revision:
           type: [integer, 'null']
+          description: Inclusive from cursor for the next page, or null when no cursor is available. A non-null cursor does not guarantee another event.
     GlobalPage:
       type: object
       required: [events, next_after]
@@ -263,6 +264,7 @@ components:
             $ref: '#/components/schemas/Event'
         next_after:
           type: integer
+          description: Exclusive after cursor for the next page; unchanged when the page is empty.
     Error:
       type: object
       required: [error]
@@ -275,7 +277,12 @@ components:
               type: string
             message:
               type: string
-            expected:
-              type: integer
-            actual:
-              type: [integer, 'null']
+            details:
+              type: object
+              description: Present for wrong_expected_revision errors.
+              required: [expected, actual]
+              properties:
+                expected:
+                  type: integer
+                actual:
+                  type: [integer, 'null']

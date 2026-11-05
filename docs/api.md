@@ -16,6 +16,8 @@ On success, HTTP 200 returns `{ "stream": "...", "revision": 0, "first_position"
 
 `GET /v1/events` accepts `after` (exclusive global position, default 0) and `limit` (1–1000, default 100). Results contain `events` and `next_after`; an empty page retains the input cursor. Each event includes `id`, `stream`, `revision`, `position`, `type`, `data`, `metadata` and `timestamp`.
 
+Read pages use a soft 4 MiB event-content budget as well as the event limit, so a short page does not necessarily mean the end. Continue with `next_revision` as `from` or `next_after` as `after`. A single event larger than the budget is still returned to ensure progress; this is not a hard response-size or memory limit.
+
 ## Subscribe and health
 
 `GET /v1/subscriptions` streams SSE; see [subscriptions](subscriptions.md). `GET /health` returns `{"status":"ok"}`; `GET /ready` checks database access and returns `{"status":"ready"}` when ready. See [OpenAPI](../openapi.yaml) for a machine-readable draft.
