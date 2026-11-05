@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use tokio_util::sync::CancellationToken;    
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::Config,
