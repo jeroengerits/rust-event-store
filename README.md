@@ -42,3 +42,5 @@ TEST_DATABASE_URL=postgres://user:password@localhost/eventstore_test \
 ```
 
 CI also smoke-tests Cloud-style PostgreSQL and Docker configurations. These checks do not verify the Cloud proxy, SSE behavior, or your deployment settings. See [deployment](docs/deployment.md) for details.
+
+For load testing, see [benchmarking](docs/benchmarking.md). It writes persistent events and should use a disposable database.

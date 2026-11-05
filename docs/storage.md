@@ -12,7 +12,7 @@ Use SQLite's online backup API or the SQLite CLI `.backup` command against the l
 sqlite3 ./data/events.db ".backup './backup/events.db'"
 ```
 
-Create the backup directory first. Test the backup with `PRAGMA integrity_check` and practice restoring it. A raw copy of only the main database while WAL is active can omit committed data; do not treat it as a consistent backup.
+Create the backup directory first. Test the backup with `PRAGMA integrity_check` and practice restoring it. A raw copy of the main database while it is in use may be inconsistent or omit committed data; do not treat it as a consistent backup.
 
 ## Restore
 

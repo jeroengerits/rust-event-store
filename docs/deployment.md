@@ -19,15 +19,16 @@ To run the PostgreSQL integration test, point `TEST_DATABASE_URL` at a **dedicat
 
 ## Docker
 
-If a Docker image or Dockerfile is supplied by your release, persist the database directory on a volume and inject the API key as a secret or environment variable. For example, substituting your built image name:
+The repository includes a Dockerfile. Persist the database directory on a volume and inject the API key as a secret or environment variable. For example:
 
 ```sh
+docker build -t eventstore .
 docker run --rm -p 8080:8080 \
   -v eventstore-data:/data \
   -e EVENTSTORE_HOST=0.0.0.0 \
   -e EVENTSTORE_DATABASE=/data/events.db \
   -e EVENTSTORE_API_KEY \
-  YOUR_EVENTSTORE_IMAGE
+  eventstore
 ```
 
-Export `EVENTSTORE_API_KEY` in the invoking environment first. This example assumes the image starts `eventstore serve`; check its entrypoint and user permissions. Container ports alone do not provide TLS or access control. Back up the database using the online backup procedure, not a live copy of just the volume's main database file. See [storage](storage.md) for recovery and upgrades.
+Export `EVENTSTORE_API_KEY` in the invoking environment first. Container ports alone do not provide TLS or access control. Back up the database using the online backup procedure, not a live copy of just the volume's main database file. See [storage](storage.md) for recovery and upgrades.
