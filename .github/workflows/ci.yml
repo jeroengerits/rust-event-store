@@ -32,6 +32,27 @@ jobs:
       - run: cargo test --locked --all-features --test postgres_contract -- --ignored
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
+      - name: Smoke-test Cloud-style configuration
+        env:
+          PORT: '18081'
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
+          EVENTSTORE_HOST: '::'
+          EVENTSTORE_API_KEY: ci-test-key
+        run: |
+          cargo build --locked --bin eventstore
+          target/debug/eventstore serve > "$RUNNER_TEMP/eventstore-cloud.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; cat "$RUNNER_TEMP/eventstore-cloud.log"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --noproxy '*' -g --fail --silent 'http://[::1]:18081/ready' > /dev/null; then break; fi
+            if [ "$attempt" -eq 30 ]; then exit 1; fi
+            sleep 1
+          done
+          test "$(curl --noproxy '*' -g --silent -o /dev/null -w '%{http_code}' 'http://[::1]:18081/v1/events')" = 401
+          curl --noproxy '*' -g --fail --silent -X POST 'http://[::1]:18081/v1/streams/cloud-ci/events' \
+            -H 'X-API-Key: ci-test-key' -H 'Content-Type: application/json' \
+            -d '{"expected_revision":-1,"events":[{"id":"0192a3b4-c5d6-7e89-8abc-123456789abc","type":"Created","data":{}}]}' > /dev/null
+          curl --noproxy '*' -g --fail --silent -H 'X-API-Key: ci-test-key' 'http://[::1]:18081/v1/streams/cloud-ci/events' | grep -q '0192a3b4-c5d6-7e89-8abc-123456789abc'
       - name: Build and smoke-test container
         run: |
           docker build -t eventstore-ci .

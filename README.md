@@ -33,7 +33,7 @@ TEST_DATABASE_URL=postgres://user:password@localhost/eventstore_test \
   cargo test --locked --all-features --test postgres_contract -- --ignored
 ```
 
-CI also builds the Docker image and smoke-tests readiness, authentication, append and read operations. See [deployment](docs/deployment.md) for container setup.
+CI also smoke-tests a Cloud-style IPv6 and PostgreSQL configuration, then builds the Docker image and checks readiness, authentication, append and read operations. See [deployment](docs/deployment.md) for container setup. These local checks do not verify Cloud's proxy, SSE behavior, or your environment's deployment settings.
 
 ## Production readiness
 
