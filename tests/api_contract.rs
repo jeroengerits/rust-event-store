@@ -47,6 +47,40 @@ async fn request(
 }
 
 #[tokio::test]
+async fn responses_disallow_caching_even_for_errors_and_subscriptions() {
+    use axum::http::header::CACHE_CONTROL;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Storage::open(dir.path().join("cache.db").to_str().unwrap())
+        .await
+        .unwrap();
+    let shutdown = CancellationToken::new();
+    let app = api::router(store, config(), shutdown.clone());
+
+    for (path, key, expected_status) in [
+        ("/health", None, StatusCode::OK),
+        ("/ready", None, StatusCode::OK),
+        ("/v1/events", Some("secret"), StatusCode::OK),
+        ("/v1/events", None, StatusCode::UNAUTHORIZED),
+        ("/missing", Some("secret"), StatusCode::NOT_FOUND),
+        ("/v1/subscriptions", Some("secret"), StatusCode::OK),
+    ] {
+        let mut builder = Request::builder().uri(path);
+        if let Some(key) = key {
+            builder = builder.header("x-api-key", key);
+        }
+        let response = app
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status, "{path}");
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store", "{path}");
+    }
+    shutdown.cancel();
+}
+
+#[tokio::test]
 async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
     let dir = tempfile::tempdir().unwrap();
     let store = Storage::open(dir.path().join("api.db").to_str().unwrap())

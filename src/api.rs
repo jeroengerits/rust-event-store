@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State, rejection::BytesRejection},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
     middleware::{self, Next},
     response::{
         IntoResponse, Response,
@@ -85,7 +85,7 @@ async fn authenticate_and_log(
                 bool::from(supplied_hash.as_slice().ct_eq(key_hash.as_slice()))
             }
         };
-    let response = if authorized {
+    let mut response = if authorized {
         next.run(request).await
     } else {
         api_error(
@@ -94,6 +94,11 @@ async fn authenticate_and_log(
             "Invalid or missing API key",
         )
     };
+    // Event data, authorization failures, and probe results must not be cached
+    // by browsers or intermediaries, including the Cloud edge cache.
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     tracing::info!(%method, status = response.status().as_u16(), "HTTP request");
     response
 }
