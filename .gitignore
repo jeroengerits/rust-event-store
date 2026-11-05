@@ -1,6 +1,7 @@
 /target
 /data
 /.idea
+/.cloud
 .env
 .env.*
 !.env.example
