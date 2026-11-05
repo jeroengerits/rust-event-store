@@ -214,6 +214,7 @@ components:
               format: date-time
     AppendRequest:
       type: object
+      additionalProperties: false
       required: [events]
       properties:
         expected_revision:
@@ -225,7 +226,9 @@ components:
           minItems: 1
           description: Ordered, distinct IDs; maximum configured by server.
           items:
-            $ref: '#/components/schemas/EventInput'
+            allOf:
+              - $ref: '#/components/schemas/EventInput'
+            unevaluatedProperties: false
     AppendResult:
       type: object
       required: [stream, revision, first_position, last_position]

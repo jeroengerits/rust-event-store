@@ -3,6 +3,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EventInput {
     pub id: Uuid,
     #[serde(rename = "type")]
@@ -25,6 +26,7 @@ pub struct Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppendRequest {
     pub expected_revision: Option<i64>,
     pub events: Vec<EventInput>,

@@ -81,6 +81,41 @@ async fn responses_disallow_caching_even_for_errors_and_subscriptions() {
 }
 
 #[tokio::test]
+async fn append_rejects_unknown_fields_without_writing_events() {
+    let store = Storage::open(":memory:").await.unwrap();
+    let app = api::router(store, config(), CancellationToken::new());
+    let event = json!({"id": Uuid::now_v7(), "type": "created", "data": {"arbitrary": true}});
+
+    for body in [
+        json!({"expected_revison": -1, "events": [event.clone()]}),
+        json!({"events": [event.clone(), {"id": Uuid::now_v7(), "type": "created", "data": {}, "metdata": {"actor": "test"}}]}),
+    ] {
+        let (status, response) = request(
+            &app,
+            "POST",
+            "/v1/streams/a/events",
+            Some("secret"),
+            body.to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(response["error"]["code"], "invalid_request");
+    }
+
+    let (_, page) = request(&app, "GET", "/v1/events", Some("secret"), String::new()).await;
+    assert_eq!(page["events"], json!([]));
+    let (status, _) = request(
+        &app,
+        "POST",
+        "/v1/streams/a/events",
+        Some("secret"),
+        json!({"events": [event]}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
     let dir = tempfile::tempdir().unwrap();
     let store = Storage::open(dir.path().join("api.db").to_str().unwrap())

@@ -6,7 +6,7 @@ Stream names are percent-encoded as a single path segment. Decoded names must be
 
 ## Append
 
-`POST /v1/streams/{stream}/events` accepts an object with `events` and optional `expected_revision`. Use `null` or omit it for no revision precondition, `-1` for a new stream, or a nonnegative integer for the current last revision. The batch must be nonempty and within configured limits. Events in a batch have distinct IDs. The full ordered batch is committed atomically.
+`POST /v1/streams/{stream}/events` accepts an object with `events` and optional `expected_revision`. Use `null` or omit it for no revision precondition, `-1` for a new stream, or a nonnegative integer for the current last revision. Unknown fields in the request or event objects are rejected, rather than silently ignored. The batch must be nonempty and within configured limits. Events in a batch have distinct IDs. The full ordered batch is committed atomically.
 
 On success, HTTP 200 returns `{ "stream": "...", "revision": 0, "first_position": 1, "last_position": 1 }`. Retry an uncertain request with the same stream, IDs in the same order and content. A successful exact retry returns the original result before checking the revision precondition. Reused IDs with different batch membership or content conflict. Revision and ID conflicts return HTTP 409; invalid input returns 400, size violations 413, unavailable storage 503. Error responses typically contain `{"error":{"code":"...","message":"..."}}`; framework-level rejections can differ.
 
