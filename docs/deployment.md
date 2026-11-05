@@ -1,0 +1,31 @@
+# Deployment
+
+Build with `cargo build --release` and run `target/release/eventstore serve`. For SQLite, provision persistent local storage for the database and sidecars. Restrict filesystem access, supervise the process, monitor readiness, logs and disk capacity, and configure tested backups. The service creates missing parent directories for SQLite file paths.
+
+For access beyond loopback set `EVENTSTORE_HOST=0.0.0.0` and provide `EVENTSTORE_API_KEY` through a secret manager. Terminate TLS at a trusted reverse proxy, restrict access to the backend, and configure the proxy not to buffer or prematurely time out SSE connections. Protect operational health endpoints according to your network policy.
+
+## Laravel Cloud / PostgreSQL
+
+1. Push the project to a connected Git repository and create a Rust application on Laravel Cloud. Attach a PostgreSQL database; Cloud supplies `DATABASE_URL`.
+2. Set the build command to `cargo build --release --locked` and the start command to `eventstore serve`. Set `EVENTSTORE_HOST=::` for Cloud's IPv6 health probes and inject a strong `EVENTSTORE_API_KEY` as a secret. The app uses Cloud's `PORT` unless `EVENTSTORE_PORT` or `--port` is set. Do not set `EVENTSTORE_DATABASE` to a local path: it overrides Cloud's `DATABASE_URL`.
+3. The app applies `migrations-postgres/` on startup using the database credentials in `DATABASE_URL`. The database role must be allowed to create and migrate tables, functions and triggers. Startup fails if migration fails; test schema changes with old and new versions in mind during rolling deployments. No separate deploy migration command is currently provided.
+4. In Cloud's deployment settings, configure `/health` as the startup and liveness endpoint and `/ready` as the readiness endpoint. Leave the health-check port at its default so requests go through Cloud's proxy. Verify authenticated writes, reads, SSE reconnects, backups and recovery in staging. PostgreSQL appends are serialized across instances for correct global cursor ordering, which limits write throughput. Global positions can contain gaps after rolled-back transactions. Other instances' subscriptions detect writes through polling (normally within two seconds).
+
+Cloud's filesystem is ephemeral: do not use SQLite there for durable events. Connecting PostgreSQL does not migrate existing SQLite data. A safe migration must preserve event IDs, stream revisions, batch retry metadata and global positions, and must be independently verified; an automatic importer is not provided.
+
+To run the PostgreSQL integration test, point `TEST_DATABASE_URL` at a **dedicated** test database and run `cargo test --test postgres_contract -- --ignored`. It creates tables and leaves test events in that database.
+
+## Docker
+
+If a Docker image or Dockerfile is supplied by your release, persist the database directory on a volume and inject the API key as a secret or environment variable. For example, substituting your built image name:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -v eventstore-data:/data \
+  -e EVENTSTORE_HOST=0.0.0.0 \
+  -e EVENTSTORE_DATABASE=/data/events.db \
+  -e EVENTSTORE_API_KEY \
+  YOUR_EVENTSTORE_IMAGE
+```
+
+Export `EVENTSTORE_API_KEY` in the invoking environment first. This example assumes the image starts `eventstore serve`; check its entrypoint and user permissions. Container ports alone do not provide TLS or access control. Back up the database using the online backup procedure, not a live copy of just the volume's main database file. See [storage](storage.md) for recovery and upgrades.

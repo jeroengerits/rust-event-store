@@ -1,0 +1,14 @@
+services:
+  eventstore:
+    build: .
+    environment:
+      EVENTSTORE_API_KEY: ${EVENTSTORE_API_KEY:?Set EVENTSTORE_API_KEY before starting the service}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - eventstore-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  eventstore-data:

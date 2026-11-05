@@ -1,0 +1,10 @@
+.git
+target
+data
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+Dockerfile
+compose.yaml

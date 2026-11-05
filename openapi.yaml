@@ -1,0 +1,278 @@
+openapi: 3.1.0
+info:
+  title: Eventstore API
+  version: 0.1.0-draft
+  description: Draft contract; verify against the running implementation. API key authentication applies when configured.
+servers:
+  - url: http://127.0.0.1:8080
+security:
+  - ApiKey: []
+  - {}
+paths:
+  /health:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /ready:
+    get:
+      summary: Database readiness
+      security: []
+      responses:
+        '200':
+          description: Database is accessible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/streams/{stream}/events:
+    parameters:
+      - name: stream
+        in: path
+        required: true
+        description: Stream name encoded as a single path segment; at most 255 UTF-8 bytes, without control characters.
+        schema:
+          type: string
+          minLength: 1
+    post:
+      summary: Atomically append an ordered batch
+      description: An exact retry of the same stream, ordered IDs and content returns the original result even with a stale expected revision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendRequest'
+      responses:
+        '200':
+          description: Committed or previously committed identical batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppendResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '413':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+    get:
+      summary: Read stream events
+      parameters:
+        - name: from
+          in: query
+          description: Inclusive stream revision. Defaults to the first revision for forward reads or latest for backward reads.
+          schema:
+            type: integer
+            minimum: 0
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [forward, backward]
+            default: forward
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page; nonexistent streams return an empty event list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/events:
+    get:
+      summary: Read global events
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page in ascending global position order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/subscriptions:
+    get:
+      summary: Subscribe to committed events using SSE
+      description: At-least-once delivery. Last-Event-ID overrides after. Frames use event name event, global position as ID and a JSON event as data. Persist a processing checkpoint and tolerate replay. The fetch limit is currently capped internally at 16.
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit'
+        - name: Last-Event-ID
+          in: header
+          description: Exclusive global position overriding after.
+          schema:
+            type: string
+            pattern: '^[0-9]+$'
+      responses:
+        '200':
+          description: Long-lived SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    After:
+      name: after
+      in: query
+      description: Exclusive global position.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Limit:
+      name: limit
+      in: query
+      description: Maximum events per page or subscription database fetch.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+  responses:
+    Error:
+      description: Request or storage error; framework-level rejections may have a different body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    EventInput:
+      type: object
+      required: [id, type, data]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Client-generated UUID version 7.
+          example: 0192a3b4-c5d6-7e89-8abc-123456789abc
+        type:
+          type: string
+          minLength: 1
+          description: Nonblank, at most 255 UTF-8 bytes, without control characters.
+        data: {}
+        metadata: {}
+    Event:
+      allOf:
+        - $ref: '#/components/schemas/EventInput'
+        - type: object
+          required: [stream, revision, position, metadata, timestamp]
+          properties:
+            stream:
+              type: string
+            revision:
+              type: integer
+              minimum: 0
+            position:
+              type: integer
+              minimum: 1
+            timestamp:
+              type: string
+              format: date-time
+    AppendRequest:
+      type: object
+      required: [events]
+      properties:
+        expected_revision:
+          type: [integer, 'null']
+          minimum: -1
+          description: Null or omitted means any revision; -1 means no stream; nonnegative means exact current revision.
+        events:
+          type: array
+          minItems: 1
+          description: Ordered, distinct IDs; maximum configured by server.
+          items:
+            $ref: '#/components/schemas/EventInput'
+    AppendResult:
+      type: object
+      required: [stream, revision, first_position, last_position]
+      properties:
+        stream:
+          type: string
+        revision:
+          type: integer
+        first_position:
+          type: integer
+        last_position:
+          type: integer
+    StreamPage:
+      type: object
+      required: [stream, events, next_revision]
+      properties:
+        stream:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        next_revision:
+          type: [integer, 'null']
+    GlobalPage:
+      type: object
+      required: [events, next_after]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        next_after:
+          type: integer
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            expected:
+              type: integer
+            actual:
+              type: [integer, 'null']
