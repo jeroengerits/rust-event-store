@@ -284,7 +284,7 @@ impl Storage {
             .bind(from.unwrap_or(if backward { i64::MAX } else { 0 }))
             .bind(limit)
             .fetch(self.pool.as_ref().expect("SQLite pool"));
-        collect_page(rows).await
+        collect_page(rows, decode_event).await
     }
 
     pub async fn read_global(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
@@ -296,7 +296,7 @@ impl Storage {
                 .bind(after)
                 .bind(limit)
                 .fetch(self.pool.as_ref().expect("SQLite pool"));
-        collect_page(rows).await
+        collect_page(rows, decode_event).await
     }
 
     pub async fn ready(&self) -> Result<(), StoreError> {
@@ -323,15 +323,16 @@ impl std::io::Write for ByteCounter {
     }
 }
 
-async fn collect_page(
-    rows: impl Stream<Item = Result<sqlx::sqlite::SqliteRow, sqlx::Error>>,
+pub(crate) async fn collect_page<R>(
+    rows: impl Stream<Item = Result<R, sqlx::Error>>,
+    decode: impl Fn(R) -> Result<Event, StoreError>,
 ) -> Result<Vec<Event>, StoreError> {
     futures::pin_mut!(rows);
     let mut events = Vec::new();
     // Reserve room for the response envelope, separators, and transport framing.
     let mut bytes = 1024usize;
     while let Some(row) = rows.try_next().await.map_err(db_error)? {
-        let event = decode_event(row)?;
+        let event = decode(row)?;
         let mut size = ByteCounter(0);
         serde_json::to_writer(&mut size, &event).map_err(|_| StoreError::Internal)?;
         let next = bytes.saturating_add(size.0).saturating_add(256);

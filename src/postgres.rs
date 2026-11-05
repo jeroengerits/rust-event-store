@@ -1,5 +1,4 @@
 use chrono::{SecondsFormat, Utc};
-use futures::{Stream, TryStreamExt};
 use sqlx::{
     PgPool, Row,
     postgres::{PgPoolOptions, PgRow},
@@ -8,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AppendRequest, AppendResult, Event},
-    storage::{StoreError, db_error},
+    storage::{StoreError, collect_page, db_error},
 };
 
 #[derive(Clone)]
@@ -151,22 +150,24 @@ impl PostgresStorage {
         } else {
             "SELECT * FROM events WHERE stream = $1 AND revision >= $2 ORDER BY revision ASC LIMIT $3"
         };
-        collect(
+        collect_page(
             sqlx::query(sql)
                 .bind(stream)
                 .bind(from.unwrap_or(if backward { i64::MAX } else { 0 }))
                 .bind(limit)
                 .fetch(&self.pool),
+            decode_event,
         )
         .await
     }
 
     pub async fn read_global(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
-        collect(
+        collect_page(
             sqlx::query("SELECT * FROM events WHERE position > $1 ORDER BY position ASC LIMIT $2")
                 .bind(after)
                 .bind(limit)
                 .fetch(&self.pool),
+            decode_event,
         )
         .await
     }
@@ -180,48 +181,21 @@ impl PostgresStorage {
     }
 }
 
-struct ByteCounter(usize);
-impl std::io::Write for ByteCounter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-async fn collect(
-    rows: impl Stream<Item = Result<PgRow, sqlx::Error>>,
-) -> Result<Vec<Event>, StoreError> {
-    futures::pin_mut!(rows);
-    let mut events = Vec::new();
-    let mut bytes = 1024usize;
-    while let Some(row) = rows.try_next().await.map_err(db_error)? {
-        let id: String = row.try_get("id").map_err(db_error)?;
-        let data: String = row.try_get("data").map_err(db_error)?;
-        let metadata: Option<String> = row.try_get("metadata").map_err(db_error)?;
-        let event = Event {
-            id: Uuid::parse_str(&id).map_err(|_| StoreError::Internal)?,
-            stream: row.try_get("stream").map_err(db_error)?,
-            revision: row.try_get("revision").map_err(db_error)?,
-            position: row.try_get("position").map_err(db_error)?,
-            event_type: row.try_get("event_type").map_err(db_error)?,
-            data: serde_json::from_str(&data).map_err(|_| StoreError::Internal)?,
-            metadata: metadata
-                .map(|value| serde_json::from_str(&value))
-                .transpose()
-                .map_err(|_| StoreError::Internal)?,
-            timestamp: row.try_get("timestamp").map_err(db_error)?,
-        };
-        let mut size = ByteCounter(0);
-        serde_json::to_writer(&mut size, &event).map_err(|_| StoreError::Internal)?;
-        let next = bytes.saturating_add(size.0).saturating_add(256);
-        if !events.is_empty() && next > 4 * 1024 * 1024 {
-            break;
-        }
-        events.push(event);
-        bytes = next;
-    }
-    Ok(events)
+fn decode_event(row: PgRow) -> Result<Event, StoreError> {
+    let id: String = row.try_get("id").map_err(db_error)?;
+    let data: String = row.try_get("data").map_err(db_error)?;
+    let metadata: Option<String> = row.try_get("metadata").map_err(db_error)?;
+    Ok(Event {
+        id: Uuid::parse_str(&id).map_err(|_| StoreError::Internal)?,
+        stream: row.try_get("stream").map_err(db_error)?,
+        revision: row.try_get("revision").map_err(db_error)?,
+        position: row.try_get("position").map_err(db_error)?,
+        event_type: row.try_get("event_type").map_err(db_error)?,
+        data: serde_json::from_str(&data).map_err(|_| StoreError::Internal)?,
+        metadata: metadata
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|_| StoreError::Internal)?,
+        timestamp: row.try_get("timestamp").map_err(db_error)?,
+    })
 }
