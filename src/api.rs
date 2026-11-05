@@ -75,14 +75,12 @@ async fn authenticate_and_log(
         || match &state.config.api_key {
             None => true,
             Some(key) => {
-                let supplied = request
-                    .headers()
-                    .get("x-api-key")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
+                let mut values = request.headers().get_all("x-api-key").iter();
+                let supplied = values.next().and_then(|v| v.to_str().ok()).unwrap_or("");
                 let supplied_hash = Sha256::digest(supplied.as_bytes());
                 let key_hash = Sha256::digest(key.as_bytes());
                 bool::from(supplied_hash.as_slice().ct_eq(key_hash.as_slice()))
+                    && values.next().is_none()
             }
         };
     let mut response = if authorized {

@@ -81,6 +81,37 @@ async fn responses_disallow_caching_even_for_errors_and_subscriptions() {
 }
 
 #[tokio::test]
+async fn duplicate_api_key_headers_are_rejected() {
+    let store = Storage::open(":memory:").await.unwrap();
+    let app = api::router(store, config(), CancellationToken::new());
+    for keys in [
+        ["secret", "wrong"],
+        ["wrong", "secret"],
+        ["secret", "secret"],
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/events")
+                    .header("x-api-key", keys[0])
+                    .header("x-api-key", keys[1])
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{keys:?}");
+    }
+    assert_eq!(
+        request(&app, "GET", "/v1/events", Some("secret"), String::new())
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn append_rejects_unknown_fields_without_writing_events() {
     let store = Storage::open(":memory:").await.unwrap();
     let app = api::router(store, config(), CancellationToken::new());

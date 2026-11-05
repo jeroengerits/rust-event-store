@@ -17,4 +17,6 @@ Limits must be positive. Batch size is capped at 10,000 and body size at 256 MiB
 
 Prefer secret injection through your deployment environment rather than placing a key on the command line, where process listings or shell history may expose it. An API key alone does not provide transport encryption.
 
+When authentication is enabled, protected requests must contain exactly one `X-API-Key` header. Requests with duplicate headers are rejected to avoid ambiguous interpretation by intermediaries.
+
 `DATABASE_URL` and `PORT` are fallback variables for the executable; explicit flags and their `EVENTSTORE_` variables take precedence. PostgreSQL URLs must start with `postgres://` or `postgresql://`. For remote databases use TLS (for example, `?sslmode=require` where appropriate). Never log or commit database credentials.
