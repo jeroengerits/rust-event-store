@@ -36,6 +36,54 @@ fn database() -> (TempDir, String) {
 }
 
 #[tokio::test]
+async fn existing_wal_database_is_switched_to_rollback_journaling() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+
+    let (_dir, path) = database();
+    let old_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE existing_data (value TEXT NOT NULL)")
+        .execute(&old_pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO existing_data VALUES ('preserved')")
+        .execute(&old_pool)
+        .await
+        .unwrap();
+    old_pool.close().await;
+
+    let store = Storage::open(&path).await.unwrap();
+    let inspection = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .unwrap();
+    let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&inspection)
+        .await
+        .unwrap();
+    assert_eq!(mode, "delete");
+    let value: String = sqlx::query_scalar("SELECT value FROM existing_data")
+        .fetch_one(&inspection)
+        .await
+        .unwrap();
+    assert_eq!(value, "preserved");
+    store
+        .append("after-upgrade", &batch(Some(-1), &[1]))
+        .await
+        .unwrap();
+    assert_eq!(store.read_global(0, 10).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn concurrent_compare_and_append_has_one_winner_across_pools() {
     let (_dir, path) = database();
     let a = Storage::open(&path).await.unwrap();

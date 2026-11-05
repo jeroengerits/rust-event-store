@@ -1,6 +1,6 @@
 # Limitations
 
-- SQLite has one writer at a time; sustained write concurrency and long transactions can cause contention or temporary unavailability.
+- SQLite has one writer at a time, and rollback journaling limits reader/writer concurrency; sustained load and long transactions can cause contention or temporary unavailability.
 - PostgreSQL appends are also globally serialized to preserve cursor ordering, limiting write throughput. Direct database writers that bypass the advisory lock can break ordering guarantees.
 - This is not a replicated or highly available cluster. Disk loss requires recovery from backup; local persistence and backup testing are operator responsibilities.
 - Global positions are ordered but should not be assumed gap-free. A restored older backup can invalidate consumer checkpoints.

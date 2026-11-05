@@ -2,7 +2,7 @@
 
 Eventstore is a small HTTP event store backed by SQLite or PostgreSQL. It appends ordered batches to named streams, reads stream or global history, and offers a live server-sent event feed. Clients supply UUIDv7 event IDs and can use expected revisions for optimistic concurrency.
 
-**Not production-ready:** the bundled SQLite 3.46.0 is affected by the rare [WAL-reset corruption bug](https://www.sqlite.org/wal.html#the_wal_reset_bug). Upgrade to a fixed SQLite release or fixed backport before relying on SQLite for durable data. The PostgreSQL backend also needs production validation and operational testing before relying on it for durable data.
+**Not production-ready:** the bundled SQLite 3.46.0 is affected by the rare [WAL-reset corruption bug](https://www.sqlite.org/wal.html#the_wal_reset_bug). The server uses rollback journaling rather than WAL to avoid the affected code path; upgrading an existing database requires a coordinated restart. Both backends still need production validation and operational testing before relying on them for durable data.
 
 ## Start
 
@@ -37,7 +37,7 @@ CI also builds the Docker image and smoke-tests readiness, authentication, appen
 
 ## Production readiness
 
-This project is not yet production-ready. In addition to the SQLite vulnerability noted above, passing tests or CI does not establish durability or suitability for a particular workload. Before deployment, validate PostgreSQL under realistic concurrency and failure conditions, test backup and restore procedures, configure TLS and access controls, and set up monitoring and alerting. See [storage and recovery](docs/storage.md), [deployment](docs/deployment.md), and [limitations](docs/limitations.md).
+This project is not yet production-ready. The SQLite WAL workaround above does not replace a fixed SQLite release, and passing tests or CI does not establish durability or suitability for a particular workload. Before deployment, validate the selected backend under realistic concurrency and failure conditions, test backup and restore procedures, configure TLS and access controls, and set up monitoring and alerting. See [storage and recovery](docs/storage.md), [deployment](docs/deployment.md), and [limitations](docs/limitations.md).
 
 ## Example append
 
