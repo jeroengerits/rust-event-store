@@ -35,17 +35,63 @@ pub(crate) fn db_error(error: sqlx::Error) -> StoreError {
         return StoreError::Unavailable;
     }
     if let sqlx::Error::Database(ref db) = error {
-        // SQLite extended result codes retain the primary code in their low byte.
+        let postgres = db
+            .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+            .is_some();
         if db
             .code()
-            .and_then(|code| code.parse::<i32>().ok())
-            .is_some_and(|code| code & 0xff == 5 || code & 0xff == 6)
+            .as_deref()
+            .is_some_and(|code| is_transient_database_code(code, postgres))
         {
             return StoreError::Unavailable;
         }
     }
     tracing::error!(%error, "event store database error");
     StoreError::Internal
+}
+
+fn is_transient_database_code(code: &str, postgres: bool) -> bool {
+    // SQLite extended result codes retain the primary code in their low byte.
+    if !postgres {
+        return code
+            .parse::<i32>()
+            .is_ok_and(|code| code & 0xff == 5 || code & 0xff == 6);
+    }
+    // PostgreSQL SQLSTATE: connection exceptions, resource exhaustion,
+    // serialization/deadlock/lock failures, and server shutdown or startup.
+    code.starts_with("08")
+        || code.starts_with("53")
+        || matches!(
+            code,
+            "40001" | "40P01" | "55P03" | "57P01" | "57P02" | "57P03"
+        )
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::is_transient_database_code;
+
+    #[test]
+    fn transient_database_codes_are_classified_as_unavailable() {
+        for code in ["5", "6", "517", "262"] {
+            assert!(is_transient_database_code(code, false), "{code}");
+        }
+        for code in [
+            "08006", "53300", "40001", "40P01", "55P03", "57P01", "57P02", "57P03",
+        ] {
+            assert!(is_transient_database_code(code, true), "{code}");
+        }
+    }
+
+    #[test]
+    fn other_database_errors_are_not_classified_as_unavailable() {
+        for code in ["1", "19", ""] {
+            assert!(!is_transient_database_code(code, false), "{code}");
+        }
+        for code in ["23505", "22021", "42601", "42P01", "57014", ""] {
+            assert!(!is_transient_database_code(code, true), "{code}");
+        }
+    }
 }
 
 #[derive(Clone)]
