@@ -32,3 +32,18 @@ jobs:
       - run: cargo test --locked --all-features --test postgres_contract -- --ignored
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
+      - name: Build and smoke-test container
+        run: |
+          docker build -t eventstore-ci .
+          docker run -d --name eventstore-ci -p 127.0.0.1:18080:8080 -e EVENTSTORE_API_KEY=ci-test-key eventstore-ci
+          trap 'docker logs eventstore-ci; docker rm -fv eventstore-ci' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/ready > /dev/null; then break; fi
+            if [ "$attempt" -eq 30 ]; then exit 1; fi
+            sleep 1
+          done
+          test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/v1/events)" = 401
+          curl --fail --silent -X POST http://127.0.0.1:18080/v1/streams/ci/events \
+            -H 'X-API-Key: ci-test-key' -H 'Content-Type: application/json' \
+            -d '{"expected_revision":-1,"events":[{"id":"0192a3b4-c5d6-7e89-8abc-123456789abc","type":"Created","data":{}}]}' > /dev/null
+          curl --fail --silent -H 'X-API-Key: ci-test-key' http://127.0.0.1:18080/v1/streams/ci/events | grep -q '0192a3b4-c5d6-7e89-8abc-123456789abc'

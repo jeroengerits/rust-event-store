@@ -16,6 +16,29 @@ By default the server binds `127.0.0.1:8080` and stores its database at `./data/
 
 For PostgreSQL, set `DATABASE_URL` to a PostgreSQL connection URL before starting. The application creates its schema at startup. Use a fresh database; an existing SQLite database is not imported automatically. See [deployment](docs/deployment.md) for Laravel Cloud and testing instructions.
 
+## Testing and CI
+
+Run the same Rust checks as CI:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+```
+
+The PostgreSQL contract is ignored by the default test run because it creates tables and leaves events behind. To run it, provide a **dedicated disposable** PostgreSQL database:
+
+```sh
+TEST_DATABASE_URL=postgres://user:password@localhost/eventstore_test \
+  cargo test --locked --all-features --test postgres_contract -- --ignored
+```
+
+CI also builds the Docker image and smoke-tests readiness, authentication, append and read operations. See [deployment](docs/deployment.md) for container setup.
+
+## Production readiness
+
+This project is not yet production-ready. In addition to the SQLite vulnerability noted above, passing tests or CI does not establish durability or suitability for a particular workload. Before deployment, validate PostgreSQL under realistic concurrency and failure conditions, test backup and restore procedures, configure TLS and access controls, and set up monitoring and alerting. See [storage and recovery](docs/storage.md), [deployment](docs/deployment.md), and [limitations](docs/limitations.md).
+
 ## Example append
 
 ```sh
