@@ -26,7 +26,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: shellcheck -x -P scripts .github/scripts/*.sh scripts/append.sh scripts/health.sh scripts/read-global.sh scripts/read-stream.sh scripts/ready.sh scripts/subscribe.sh
+      - run: shellcheck -x -P scripts .github/scripts/*.sh scripts/*.sh
       - run: bash .github/scripts/check-build-context.sh
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings

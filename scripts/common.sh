@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Shared settings for the endpoint scripts; source rather than execute this file.
+# shellcheck disable=SC2034 # Variables are consumed by scripts that source this file.
 
 BASE_URL=${EVENTSTORE_URL:-http://127.0.0.1:8080}
 BASE_URL=${BASE_URL%/}
