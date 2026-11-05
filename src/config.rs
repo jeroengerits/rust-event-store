@@ -13,7 +13,7 @@ pub enum Command {
     Serve(Config),
 }
 
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Clone, clap::Args)]
 pub struct Config {
     #[arg(long, env = "EVENTSTORE_HOST", default_value = "127.0.0.1")]
     pub host: IpAddr,
@@ -31,6 +31,21 @@ pub struct Config {
     pub max_batch_size: usize,
     #[arg(long, env = "EVENTSTORE_MAX_BODY_SIZE", default_value_t = 4_194_304)]
     pub max_body_size: usize,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database", &"[REDACTED]")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("log_level", &self.log_level)
+            .field("max_event_size", &self.max_event_size)
+            .field("max_batch_size", &self.max_batch_size)
+            .field("max_body_size", &self.max_body_size)
+            .finish()
+    }
 }
 
 impl Config {
@@ -53,5 +68,33 @@ impl Config {
             return Err("database path must not be empty".into());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_credentials() {
+        let config = Config {
+            host: "127.0.0.1".parse().unwrap(),
+            port: 8080,
+            database: "postgres://user:database-secret@localhost/events".into(),
+            api_key: Some("api-secret".into()),
+            log_level: "info".into(),
+            max_event_size: 1024,
+            max_batch_size: 10,
+            max_body_size: 4096,
+        };
+        let output = format!("{config:?}");
+        assert!(!output.contains("api-secret"));
+        assert!(!output.contains("database-secret"));
+        assert!(output.contains("[REDACTED]"));
+        assert!(output.contains("max_batch_size: 10"));
+        let command = Command::Serve(config);
+        let output = format!("{command:?}");
+        assert!(!output.contains("api-secret"));
+        assert!(!output.contains("database-secret"));
     }
 }
