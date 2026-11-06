@@ -101,6 +101,31 @@ pub struct Storage {
     pub notify: Arc<Notify>,
 }
 
+pub(crate) struct PreparedBatch {
+    pub(crate) ids: Vec<String>,
+    pub(crate) ids_json: String,
+    pub(crate) contents: String,
+}
+
+fn prepare_batch(req: &AppendRequest) -> Result<PreparedBatch, StoreError> {
+    if req.events.is_empty() {
+        return Err(StoreError::Internal);
+    }
+    let ids: Vec<String> = req
+        .events
+        .iter()
+        .map(|event| event.id.to_string())
+        .collect();
+    if ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len() {
+        return Err(StoreError::DuplicateEventId);
+    }
+    Ok(PreparedBatch {
+        ids_json: serde_json::to_string(&ids).map_err(|_| StoreError::Internal)?,
+        contents: serde_json::to_string(&req.events).map_err(|_| StoreError::Internal)?,
+        ids,
+    })
+}
+
 impl Storage {
     pub async fn open(path: &str) -> Result<Self, StoreError> {
         if path.starts_with("postgres://") || path.starts_with("postgresql://") {
@@ -150,25 +175,17 @@ impl Storage {
         stream: &str,
         req: &AppendRequest,
     ) -> Result<AppendResult, StoreError> {
+        let batch = prepare_batch(req)?;
         if let Some(postgres) = &self.postgres {
-            let result = postgres.append(stream, req).await?;
+            let result = postgres.append(stream, req, &batch).await?;
             self.notify.notify_waiters();
             return Ok(result);
         }
-        if req.events.is_empty() {
-            return Err(StoreError::Internal);
-        }
-        let ids: Vec<String> = req
-            .events
-            .iter()
-            .map(|event| event.id.to_string())
-            .collect();
-        let unique: std::collections::HashSet<_> = ids.iter().collect();
-        if unique.len() != ids.len() {
-            return Err(StoreError::DuplicateEventId);
-        }
-        let ids_json = serde_json::to_string(&ids).map_err(|_| StoreError::Internal)?;
-        let contents = serde_json::to_string(&req.events).map_err(|_| StoreError::Internal)?;
+        let PreparedBatch {
+            ids,
+            ids_json,
+            contents,
+        } = batch;
         let mut tx = self
             .pool
             .as_ref()
@@ -377,6 +394,31 @@ mod tests {
             data: json!({"id": id}),
             metadata: None,
         }
+    }
+
+    #[tokio::test]
+    async fn append_rejects_empty_and_duplicate_batches() {
+        let store = Storage::open(":memory:").await.unwrap();
+        let mut req = AppendRequest {
+            expected_revision: None,
+            events: vec![],
+        };
+        assert!(matches!(
+            store.append("a", &req).await,
+            Err(StoreError::Internal)
+        ));
+        req.events = vec![event(1), event(1)];
+        assert!(matches!(
+            store.append("a", &req).await,
+            Err(StoreError::DuplicateEventId)
+        ));
+        assert!(
+            store
+                .read_stream("a", None, 10, false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

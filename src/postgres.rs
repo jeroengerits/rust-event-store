@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AppendRequest, AppendResult, Event},
-    storage::{StoreError, collect_page, db_error},
+    storage::{PreparedBatch, StoreError, collect_page, db_error},
 };
 
 #[derive(Clone)]
@@ -36,20 +36,13 @@ impl PostgresStorage {
         &self,
         stream: &str,
         req: &AppendRequest,
+        batch: &PreparedBatch,
     ) -> Result<AppendResult, StoreError> {
-        if req.events.is_empty() {
-            return Err(StoreError::Internal);
-        }
-        let ids: Vec<String> = req
-            .events
-            .iter()
-            .map(|event| event.id.to_string())
-            .collect();
-        if ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len() {
-            return Err(StoreError::DuplicateEventId);
-        }
-        let ids_json = serde_json::to_string(&ids).map_err(|_| StoreError::Internal)?;
-        let contents = serde_json::to_string(&req.events).map_err(|_| StoreError::Internal)?;
+        let PreparedBatch {
+            ids,
+            ids_json,
+            contents,
+        } = batch;
         let mut tx = self.pool.begin().await.map_err(db_error)?;
         // A global transaction lock makes sequence allocation and commits ordered across
         // every instance. Sequences alone do not guarantee commit order.
@@ -61,12 +54,12 @@ impl PostgresStorage {
             .bind(&ids[0]).fetch_optional(&mut *tx).await.map_err(db_error)?;
         if let Some(row) = existing {
             let previous_ids: String = row.try_get("event_ids").map_err(db_error)?;
-            if previous_ids != ids_json {
+            if previous_ids != *ids_json {
                 return Err(StoreError::DuplicateEventId);
             }
             let previous_stream: String = row.try_get("stream").map_err(db_error)?;
             let previous_contents: String = row.try_get("contents").map_err(db_error)?;
-            if previous_stream != stream || previous_contents != contents {
+            if previous_stream != stream || previous_contents != *contents {
                 return Err(StoreError::IdempotencyConflict);
             }
             return Ok(AppendResult {
@@ -103,7 +96,7 @@ impl PostgresStorage {
             .checked_add(req.events.len() as i64)
             .ok_or(StoreError::Internal)?;
         let batch_id: i64 = sqlx::query_scalar("INSERT INTO batches (stream, event_ids, contents, revision, first_position, last_position) VALUES ($1, $2, $3, $4, 0, 0) RETURNING id")
-            .bind(stream).bind(&ids_json).bind(&contents).bind(last_revision).fetch_one(&mut *tx).await.map_err(db_error)?;
+            .bind(stream).bind(ids_json).bind(contents).bind(last_revision).fetch_one(&mut *tx).await.map_err(db_error)?;
         let mut first_position = 0;
         let mut last_position = 0;
         for (index, event) in req.events.iter().enumerate() {

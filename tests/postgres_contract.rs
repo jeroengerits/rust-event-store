@@ -54,6 +54,26 @@ async fn postgres_multi_instance_contract() {
     let a = Storage::open(&url).await.unwrap();
     let b = Storage::open(&url).await.unwrap();
     let stream = format!("test-{}", Uuid::now_v7());
+    let mut invalid = AppendRequest {
+        expected_revision: None,
+        events: vec![],
+    };
+    assert!(matches!(
+        a.append(&stream, &invalid).await,
+        Err(StoreError::Internal)
+    ));
+    let duplicate_event = request(None).events.remove(0);
+    invalid.events = vec![duplicate_event.clone(), duplicate_event];
+    assert!(matches!(
+        a.append(&stream, &invalid).await,
+        Err(StoreError::DuplicateEventId)
+    ));
+    assert!(
+        a.read_stream(&stream, None, 10, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let one = request(Some(-1));
     let two = request(Some(-1));
     let (first, second) = tokio::join!(a.append(&stream, &one), b.append(&stream, &two));
