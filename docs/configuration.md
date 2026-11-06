@@ -20,3 +20,5 @@ Prefer secret injection through your deployment environment rather than placing 
 When authentication is enabled, protected requests must contain exactly one `X-API-Key` header. Requests with duplicate headers are rejected to avoid ambiguous interpretation by intermediaries.
 
 `DATABASE_URL` and `PORT` are fallback variables for the executable; explicit flags and their `EVENTSTORE_` variables take precedence. PostgreSQL URLs must start with `postgres://` or `postgresql://`. For remote databases use TLS (for example, `?sslmode=require` where appropriate). Never log or commit database credentials.
+
+SQLite `:memory:` and SQLite URLs using `mode=memory` are intended for temporary testing, not durable storage. The pool does not age out its sole connection, but closing or losing that connection, or stopping the process, loses the database. Use a persistent SQLite path or PostgreSQL for data that must survive a restart.

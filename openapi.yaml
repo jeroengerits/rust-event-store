@@ -121,7 +121,7 @@ paths:
   /v1/subscriptions:
     get:
       summary: Subscribe to committed events using SSE
-      description: At-least-once delivery. Last-Event-ID overrides after. Frames use event name event, global position as ID and a JSON event as data. Persist a processing checkpoint and tolerate replay. The fetch limit is currently capped internally at 16.
+      description: At-least-once delivery. A single nonnegative Last-Event-ID overrides after; duplicate or comma-separated values are rejected. Frames use event name event, global position as ID and a JSON event as data. Persist a processing checkpoint and tolerate replay. The fetch limit is currently capped internally at 16.
       parameters:
         - $ref: '#/components/parameters/After'
         - $ref: '#/components/parameters/Limit'

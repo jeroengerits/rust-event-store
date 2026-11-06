@@ -135,7 +135,9 @@ impl Storage {
                 notify: Arc::new(Notify::new()),
             });
         }
-        let options = if path.starts_with("sqlite:") {
+        let options = if path == ":memory:" {
+            SqliteConnectOptions::from_str("sqlite::memory:").map_err(db_error)?
+        } else if path.starts_with("sqlite:") {
             SqliteConnectOptions::from_str(path).map_err(db_error)?
         } else {
             SqliteConnectOptions::new().filename(path)
@@ -147,15 +149,17 @@ impl Storage {
         .synchronous(SqliteSynchronous::Full)
         .busy_timeout(Duration::from_secs(5))
         .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(if path == ":memory:" || path.contains(":memory:") {
-                1
-            } else {
-                8
-            })
-            .connect_with(options)
-            .await
-            .map_err(db_error)?;
+        let in_memory = sqlite_in_memory(path);
+        let pool_options = if in_memory {
+            // Retiring the last connection destroys an in-memory database.
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+        } else {
+            SqlitePoolOptions::new().max_connections(8)
+        };
+        let pool = pool_options.connect_with(options).await.map_err(db_error)?;
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -328,6 +332,20 @@ impl Storage {
     }
 }
 
+fn sqlite_in_memory(path: &str) -> bool {
+    if path == ":memory:" {
+        return true;
+    }
+    let Some(url) = path.strip_prefix("sqlite:") else {
+        return false;
+    };
+    let url = url.trim_start_matches("//");
+    let (database, query) = url.split_once('?').unwrap_or((url, ""));
+    database == ":memory:"
+        || url::form_urlencoded::parse(query.as_bytes())
+            .any(|(key, value)| key == "mode" && value == "memory")
+}
+
 // Count the actual JSON encoding, including escaping, without allocating another copy.
 struct ByteCounter(usize);
 impl std::io::Write for ByteCounter {
@@ -394,6 +412,39 @@ mod tests {
             data: json!({"id": id}),
             metadata: None,
         }
+    }
+
+    #[tokio::test]
+    async fn memory_databases_do_not_retire_their_only_connection() {
+        for path in [
+            ":memory:",
+            "sqlite::memory:",
+            "sqlite://named-test?mode=memory&cache=private",
+            "sqlite://encoded-test?%6dode=mem%6fry",
+        ] {
+            let store = Storage::open(path).await.unwrap();
+            let pool = store.pool.as_ref().unwrap();
+            assert_eq!(pool.options().get_max_connections(), 1, "{path}");
+            assert_eq!(pool.options().get_idle_timeout(), None, "{path}");
+            assert_eq!(pool.options().get_max_lifetime(), None, "{path}");
+            store
+                .append(
+                    "a",
+                    &AppendRequest {
+                        expected_revision: None,
+                        events: vec![event(1)],
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(store.read_global(0, 10).await.unwrap().len(), 1, "{path}");
+        }
+    }
+
+    #[test]
+    fn disk_paths_containing_memory_marker_are_not_memory_databases() {
+        assert!(!sqlite_in_memory("./:memory:-events.db"));
+        assert!(!sqlite_in_memory("sqlite://events.db?mode=rwc"));
     }
 
     #[tokio::test]

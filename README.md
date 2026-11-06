@@ -10,7 +10,7 @@ A small HTTP event store backed by SQLite or PostgreSQL. Append events to named 
 cargo run --release -- serve
 ```
 
-The server listens on `127.0.0.1:8080` and uses `./data/events.db` by default. Set `DATABASE_URL` to use PostgreSQL; the schema is created at startup, but existing SQLite data is not imported. Non-loopback binding requires an API key and a trusted TLS proxy. See [configuration](docs/configuration.md) and [deployment](docs/deployment.md).
+The server listens on `127.0.0.1:8080` and uses `./data/events.db` by default. SQLite `:memory:` is temporary and loses data when its connection closes. Set `DATABASE_URL` to use PostgreSQL; the schema is created at startup, but existing SQLite data is not imported. Non-loopback binding requires an API key and a trusted TLS proxy. See [configuration](docs/configuration.md) and [deployment](docs/deployment.md).
 
 ## Example
 
@@ -23,6 +23,8 @@ curl http://127.0.0.1:8080/v1/streams/orders-123/events
 ```
 
 Retry timed-out appends with the same IDs and content. For paginated reads, continue from `next_revision` or `next_after`; a short page does not necessarily mean the end. See the [API](docs/api.md), [OpenAPI specification](openapi.yaml), and [subscriptions](docs/subscriptions.md).
+
+Subscriptions deliver events at least once. Persist a processing checkpoint and reconnect from it; send at most one `Last-Event-ID` header to avoid an ambiguous replay position.
 
 The scripts in `scripts/` wrap the HTTP endpoints. Set `EVENTSTORE_URL` and, if needed, `EVENTSTORE_API_KEY`; scripts accepting arguments provide `--help`.
 

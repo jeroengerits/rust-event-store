@@ -392,7 +392,16 @@ async fn subscribe(
             );
         }
     };
-    let mut cursor = match headers.get("last-event-id") {
+    let mut last_event_ids = headers.get_all("last-event-id").iter();
+    let last_event_id = last_event_ids.next();
+    if last_event_ids.next().is_some() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Invalid Last-Event-ID",
+        );
+    }
+    let mut cursor = match last_event_id {
         Some(value) => match value.to_str().ok().and_then(|s| s.parse::<i64>().ok()) {
             Some(value) if value >= 0 => value,
             _ => {

@@ -257,6 +257,44 @@ async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
 }
 
 #[tokio::test]
+async fn subscription_rejects_ambiguous_last_event_id_headers() {
+    let store = Storage::open(":memory:").await.unwrap();
+    let app = api::router(store, config(), CancellationToken::new());
+
+    for values in [["0", "1"], ["1", "0"], ["1", "1"]] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/subscriptions?after=0")
+                    .header("x-api-key", "secret")
+                    .header("last-event-id", values[0])
+                    .header("last-event-id", values[1])
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{values:?}");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_request");
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/subscriptions")
+                .header("x-api-key", "secret")
+                .header("last-event-id", "0, 1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn subscription_replays_after_last_event_id_and_closes_on_shutdown() {
     use eventstore::domain::{AppendRequest, EventInput};
     use std::time::Duration;
