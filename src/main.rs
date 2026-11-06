@@ -25,15 +25,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .json()
         .with_env_filter(EnvFilter::try_new(&config.log_level)?)
         .init();
-    if !config.database.starts_with("postgres://")
-        && !config.database.starts_with("postgresql://")
-        && !config.database.starts_with("sqlite:")
-        && let Some(parent) = std::path::Path::new(&config.database)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-    {
-        tokio::fs::create_dir_all(parent).await?;
-    }
     let storage = Storage::open(&config.database).await?;
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -113,7 +104,7 @@ mod tests {
         Config {
             host: "127.0.0.1".parse().unwrap(),
             port: 8080,
-            database: "./data/events.db".into(),
+            database: "".into(),
             api_key: None,
             log_level: "info".into(),
             max_event_size: 1_048_576,
@@ -140,7 +131,7 @@ mod tests {
             assert_eq!(
                 config.database,
                 if database_override {
-                    "./data/events.db"
+                    ""
                 } else {
                     "postgres://localhost/store"
                 }
@@ -159,6 +150,6 @@ mod tests {
         let mut config = config();
         apply_cloud_defaults(&mut config, false, false, None, None).unwrap();
         assert_eq!(config.port, 8080);
-        assert_eq!(config.database, "./data/events.db");
+        assert_eq!(config.database, "");
     }
 }

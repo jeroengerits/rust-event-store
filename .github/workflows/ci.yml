@@ -34,6 +34,9 @@ jobs:
       - run: cargo test --locked --all-features --test postgres_contract -- --ignored
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
+      - run: cargo test --locked --all-features --test api_contract --test storage_contract -- --ignored
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
       - name: Smoke-test Cloud-style configuration
         env:
           PORT: '18081'
@@ -46,9 +49,13 @@ jobs:
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; cat "$RUNNER_TEMP/eventstore-cloud.log"' EXIT
           bash .github/scripts/smoke-test.sh 'http://[::1]:18081'
+      - name: Test recovery after application crash
+        env:
+          RECOVERY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
+        run: bash .github/scripts/recovery-test.sh
       - name: Build and smoke-test container
         run: |
           docker build -t eventstore-ci .
-          docker run -d --name eventstore-ci -p 127.0.0.1:18080:8080 -e EVENTSTORE_API_KEY=ci-test-key eventstore-ci
+          docker run -d --name eventstore-ci --network host -e EVENTSTORE_PORT=18080 -e DATABASE_URL=postgres://postgres:postgres@localhost:5432/eventstore_test -e EVENTSTORE_API_KEY=ci-test-key eventstore-ci
           trap 'docker logs eventstore-ci; docker rm -fv eventstore-ci' EXIT
           bash .github/scripts/smoke-test.sh http://127.0.0.1:18080

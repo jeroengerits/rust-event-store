@@ -1,6 +1,6 @@
 # Deployment
 
-Build with `cargo build --release` and run `target/release/eventstore serve`. For SQLite, provision persistent local storage for the database and sidecars. Restrict filesystem access, supervise the process, monitor readiness, logs and disk capacity, and configure tested backups. The service creates missing parent directories for SQLite file paths.
+Build with `cargo build --release` and run `target/release/eventstore serve` with `DATABASE_URL` set to a PostgreSQL URL. Supervise the process, monitor readiness, logs and database capacity, and configure tested backups.
 
 For access beyond loopback set `EVENTSTORE_HOST=0.0.0.0` and provide `EVENTSTORE_API_KEY` through a secret manager. Terminate TLS at a trusted reverse proxy, restrict access to the backend, and configure the proxy not to buffer or prematurely time out SSE connections. Protect operational health endpoints according to your network policy.
 
@@ -13,22 +13,18 @@ For access beyond loopback set `EVENTSTORE_HOST=0.0.0.0` and provide `EVENTSTORE
 
 After saving health-check settings, confirm they are shown in Cloud and redeploy to apply them. Check both endpoints after deployment. Responses include `Cache-Control: no-store` to discourage caching event data and stale health results; ensure any proxy or CDN respects this header. If an endpoint returns a cached error from before the deployment, purge that path from Cloud's edge cache and check it again. A successful deployment or a healthy public endpoint alone does not confirm that the custom probes are configured.
 
-Cloud's filesystem is ephemeral: do not use SQLite there for durable events. Connecting PostgreSQL does not migrate existing SQLite data. A safe migration must preserve event IDs, stream revisions, batch retry metadata and global positions, and must be independently verified; an automatic importer is not provided.
+Connecting PostgreSQL does not migrate existing SQLite data. A safe migration must preserve event IDs, stream revisions, batch retry metadata and global positions, and must be independently verified; an automatic importer is not provided.
 
-To run the PostgreSQL integration test, point `TEST_DATABASE_URL` at a **dedicated** test database and run `cargo test --test postgres_contract -- --ignored`. It creates tables and leaves test events in that database.
+To run the integration tests, see the [README](../README.md#test). Use a dedicated disposable PostgreSQL server, never production.
 
 ## Docker
 
-The repository includes a Dockerfile. Persist the database directory on a volume and inject the API key as a secret or environment variable. For example:
+The container requires a reachable PostgreSQL server and an API key. For example:
 
 ```sh
 docker build -t eventstore .
-docker run --rm -p 8080:8080 \
-  -v eventstore-data:/data \
-  -e EVENTSTORE_HOST=0.0.0.0 \
-  -e EVENTSTORE_DATABASE=/data/events.db \
-  -e EVENTSTORE_API_KEY \
-  eventstore
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e DATABASE_URL -e EVENTSTORE_API_KEY eventstore
 ```
 
-Export `EVENTSTORE_API_KEY` in the invoking environment first. Container ports alone do not provide TLS or access control. Back up the database using the online backup procedure, not a live copy of just the volume's main database file. See [storage](storage.md) for recovery and upgrades.
+Export `DATABASE_URL` and `EVENTSTORE_API_KEY` first. The database hostname must be reachable from inside the container; `localhost` refers to the container itself. Container ports alone do not provide TLS or access control. See [storage](storage.md) for recovery and upgrades.

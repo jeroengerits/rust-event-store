@@ -16,6 +16,10 @@ pub(crate) struct PostgresStorage {
 }
 
 impl PostgresStorage {
+    pub(crate) fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     pub async fn open(url: &str) -> Result<Self, StoreError> {
         let pool = PgPoolOptions::new()
             .max_connections(8)

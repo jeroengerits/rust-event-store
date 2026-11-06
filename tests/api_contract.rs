@@ -46,14 +46,12 @@ async fn request(
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-#[tokio::test]
-async fn responses_disallow_caching_even_for_errors_and_subscriptions() {
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn responses_disallow_caching_even_for_errors_and_subscriptions(pool: sqlx::PgPool) {
     use axum::http::header::CACHE_CONTROL;
 
-    let dir = tempfile::tempdir().unwrap();
-    let store = Storage::open(dir.path().join("cache.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let store = Storage::from_pool(pool);
     let shutdown = CancellationToken::new();
     let app = api::router(store, config(), shutdown.clone());
 
@@ -80,9 +78,10 @@ async fn responses_disallow_caching_even_for_errors_and_subscriptions() {
     shutdown.cancel();
 }
 
-#[tokio::test]
-async fn duplicate_api_key_headers_are_rejected() {
-    let store = Storage::open(":memory:").await.unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn duplicate_api_key_headers_are_rejected(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool);
     let app = api::router(store, config(), CancellationToken::new());
     for keys in [
         ["secret", "wrong"],
@@ -111,9 +110,10 @@ async fn duplicate_api_key_headers_are_rejected() {
     );
 }
 
-#[tokio::test]
-async fn append_rejects_unknown_fields_without_writing_events() {
-    let store = Storage::open(":memory:").await.unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn append_rejects_unknown_fields_without_writing_events(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool);
     let app = api::router(store, config(), CancellationToken::new());
     let event = json!({"id": Uuid::now_v7(), "type": "created", "data": {"arbitrary": true}});
 
@@ -146,12 +146,10 @@ async fn append_rejects_unknown_fields_without_writing_events() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
-async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Storage::open(dir.path().join("api.db").to_str().unwrap())
-        .await
-        .unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn json_routes_enforce_auth_validation_conflicts_and_pagination(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool);
     let app = api::router(store, config(), CancellationToken::new());
     assert_eq!(
         request(&app, "GET", "/health", None, String::new()).await.0,
@@ -256,9 +254,10 @@ async fn json_routes_enforce_auth_validation_conflicts_and_pagination() {
     );
 }
 
-#[tokio::test]
-async fn subscription_rejects_ambiguous_last_event_id_headers() {
-    let store = Storage::open(":memory:").await.unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn subscription_rejects_ambiguous_last_event_id_headers(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool);
     let app = api::router(store, config(), CancellationToken::new());
 
     for values in [["0", "1"], ["1", "0"], ["1", "1"]] {
@@ -294,14 +293,12 @@ async fn subscription_rejects_ambiguous_last_event_id_headers() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-#[tokio::test]
-async fn subscription_replays_after_last_event_id_and_closes_on_shutdown() {
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn subscription_replays_after_last_event_id_and_closes_on_shutdown(pool: sqlx::PgPool) {
     use eventstore::domain::{AppendRequest, EventInput};
     use std::time::Duration;
-    let dir = tempfile::tempdir().unwrap();
-    let store = Storage::open(dir.path().join("sse.db").to_str().unwrap())
-        .await
-        .unwrap();
+    let store = Storage::from_pool(pool);
     let events = (0..2)
         .map(|n| EventInput {
             id: Uuid::now_v7(),

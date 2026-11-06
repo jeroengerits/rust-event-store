@@ -1,16 +1,16 @@
 # Eventstore
 
-A small HTTP event store backed by SQLite or PostgreSQL. Append events to named streams, read stream or global history, and subscribe to live events over SSE. Events use client-generated UUIDv7 IDs and support optimistic concurrency.
+A small HTTP event store backed by PostgreSQL. Append events to named streams, read stream or global history, and subscribe to live events over SSE. Events use client-generated UUIDv7 IDs and support optimistic concurrency.
 
-**Not production-ready.** The bundled SQLite version has a WAL corruption bug; Eventstore uses rollback journaling as a workaround, not a fix. Existing databases require a coordinated restart when upgrading. Both backends need further durability and operational testing. See [storage](docs/storage.md) and [limitations](docs/limitations.md).
+**Not production-ready.** Further durability and operational testing is required. See [storage](docs/storage.md) and [limitations](docs/limitations.md).
 
 ## Start
 
 ```sh
-cargo run --release -- serve
+DATABASE_URL=postgres://user:password@localhost/eventstore cargo run --release -- serve
 ```
 
-The server listens on `127.0.0.1:8080` and uses `./data/events.db` by default. SQLite `:memory:` is temporary and loses data when its connection closes. Set `DATABASE_URL` to use PostgreSQL; the schema is created at startup, but existing SQLite data is not imported. Non-loopback binding requires an API key and a trusted TLS proxy. See [configuration](docs/configuration.md) and [deployment](docs/deployment.md).
+The server listens on `127.0.0.1:8080` and requires a PostgreSQL `DATABASE_URL`. The schema is created at startup. Existing SQLite data is not imported; preserve and back it up before upgrading. Non-loopback binding requires an API key and a trusted TLS proxy. See [configuration](docs/configuration.md) and [deployment](docs/deployment.md).
 
 ## Example
 
@@ -36,13 +36,15 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features
 ```
 
-PostgreSQL integration tests write data and require a **dedicated disposable** database:
+PostgreSQL integration tests require a **dedicated disposable** PostgreSQL server. The API and storage contract tests create isolated test databases and need a role with `CREATEDB` privileges; failed tests can leave databases behind. The PostgreSQL contract tests write to the supplied database:
 
 ```sh
 TEST_DATABASE_URL=postgres://user:password@localhost/eventstore_test \
   cargo test --locked --all-features --test postgres_contract -- --ignored
+DATABASE_URL=postgres://user:password@localhost/eventstore_test \
+  cargo test --locked --all-features --test api_contract --test storage_contract -- --ignored
 ```
 
-CI also smoke-tests Cloud-style PostgreSQL and Docker configurations. These checks do not verify the Cloud proxy, SSE behavior, or your deployment settings. See [deployment](docs/deployment.md) for details.
+CI also smoke-tests Cloud-style PostgreSQL and Docker configurations and checks recovery after an application crash. These checks do not verify database failover, backup restoration, the Cloud proxy, or your deployment settings. See [storage](docs/storage.md#durability-validation) and [deployment](docs/deployment.md) for details.
 
 For load testing, see [benchmarking](docs/benchmarking.md). It writes persistent events and should use a disposable database.

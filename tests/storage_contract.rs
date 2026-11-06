@@ -4,7 +4,6 @@ use eventstore::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use tempfile::TempDir;
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
@@ -24,70 +23,15 @@ fn batch(expected_revision: Option<i64>, ids: &[u128]) -> AppendRequest {
     }
 }
 
-fn database() -> (TempDir, String) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir
-        .path()
-        .join("events.sqlite")
-        .to_str()
-        .unwrap()
-        .to_owned();
-    (dir, path)
-}
-
-#[tokio::test]
-async fn existing_wal_database_is_switched_to_rollback_journaling() {
-    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-
-    let (_dir, path) = database();
-    let old_pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(&path)
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal),
-        )
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn concurrent_compare_and_append_has_one_winner_across_pools(pool: sqlx::PgPool) {
+    let second_pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_with((*pool.connect_options()).clone())
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE existing_data (value TEXT NOT NULL)")
-        .execute(&old_pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO existing_data VALUES ('preserved')")
-        .execute(&old_pool)
-        .await
-        .unwrap();
-    old_pool.close().await;
-
-    let store = Storage::open(&path).await.unwrap();
-    let inspection = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(SqliteConnectOptions::new().filename(&path))
-        .await
-        .unwrap();
-    let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
-        .fetch_one(&inspection)
-        .await
-        .unwrap();
-    assert_eq!(mode, "delete");
-    let value: String = sqlx::query_scalar("SELECT value FROM existing_data")
-        .fetch_one(&inspection)
-        .await
-        .unwrap();
-    assert_eq!(value, "preserved");
-    store
-        .append("after-upgrade", &batch(Some(-1), &[1]))
-        .await
-        .unwrap();
-    assert_eq!(store.read_global(0, 10).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn concurrent_compare_and_append_has_one_winner_across_pools() {
-    let (_dir, path) = database();
-    let a = Storage::open(&path).await.unwrap();
-    let b = Storage::open(&path).await.unwrap();
+    let a = Storage::from_pool(pool.clone());
+    let b = Storage::from_pool(second_pool);
     let barrier = Arc::new(Barrier::new(9));
     let mut tasks = Vec::new();
     for i in 0..8 {
@@ -121,14 +65,13 @@ async fn concurrent_compare_and_append_has_one_winner_across_pools() {
     assert_eq!(b.read_global(0, 100).await.unwrap().len(), 1);
 }
 
-#[tokio::test]
-async fn insert_failure_rolls_back_the_whole_batch_and_leaves_ids_reusable() {
-    let (_dir, path) = database();
-    let store = Storage::open(&path).await.unwrap();
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{path}"))
-        .await
-        .unwrap();
-    sqlx::query("CREATE TRIGGER fail_second BEFORE INSERT ON events WHEN NEW.event_type = 'fail' BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn insert_failure_rolls_back_the_whole_batch_and_leaves_ids_reusable(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool.clone());
+    sqlx::query("CREATE FUNCTION fail_second_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'fail' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$")
+        .execute(&pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER fail_second BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION fail_second_fn()")
         .execute(&pool).await.unwrap();
     let mut request = batch(Some(-1), &[1, 2, 3]);
     request.events[1].event_type = "fail".into();
@@ -141,7 +84,7 @@ async fn insert_failure_rolls_back_the_whole_batch_and_leaves_ids_reusable() {
             .unwrap()
             .is_empty()
     );
-    sqlx::query("DROP TRIGGER fail_second")
+    sqlx::query("DROP TRIGGER fail_second ON events")
         .execute(&pool)
         .await
         .unwrap();
@@ -150,10 +93,10 @@ async fn insert_failure_rolls_back_the_whole_batch_and_leaves_ids_reusable() {
     assert_eq!(store.read_global(0, 100).await.unwrap().len(), 3);
 }
 
-#[tokio::test]
-async fn retry_after_advance_is_exact_and_conflicting_reuse_never_writes() {
-    let (_dir, path) = database();
-    let store = Storage::open(&path).await.unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn retry_after_advance_is_exact_and_conflicting_reuse_never_writes(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool.clone());
     let original = batch(Some(-1), &[1, 2, 3]);
     let first = store.append("a", &original).await.unwrap();
     store.append("a", &batch(Some(2), &[4])).await.unwrap();
@@ -187,17 +130,21 @@ async fn retry_after_advance_is_exact_and_conflicting_reuse_never_writes() {
     );
 }
 
-#[tokio::test]
-async fn restart_preserves_json_batches_and_paginated_global_order() {
-    let (_dir, path) = database();
-    let store = Storage::open(&path).await.unwrap();
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn restart_preserves_json_batches_and_paginated_global_order(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool.clone());
     let request = batch(Some(-1), &[11, 12]);
     let first = store.append("alpha", &request).await.unwrap();
     store.append("beta", &batch(Some(-1), &[13])).await.unwrap();
     store.append("alpha", &batch(Some(1), &[14])).await.unwrap();
     let before = store.read_global(0, 100).await.unwrap();
     drop(store);
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened_pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let reopened = Storage::from_pool(reopened_pool);
     reopened.ready().await.unwrap();
     assert_eq!(reopened.append("alpha", &request).await.unwrap(), first);
     let page1 = reopened.read_global(0, 2).await.unwrap();
@@ -237,4 +184,26 @@ async fn restart_preserves_json_batches_and_paginated_global_order() {
         .await
         .unwrap();
     assert_eq!(forward[0].revision, 1);
+}
+
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn schema_enforces_append_only_and_valid_json(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool.clone());
+    store.append("a", &batch(Some(-1), &[1])).await.unwrap();
+    assert!(
+        sqlx::query("UPDATE events SET revision = 9")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("DELETE FROM events")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert!(sqlx::query("INSERT INTO events (id, stream, revision, event_type, data, timestamp, batch_id) VALUES ('x', 'a', 1, 'x', 'not json', 'now', 1)").execute(&pool).await.is_err());
+    assert!(sqlx::query("INSERT INTO events (id, stream, revision, event_type, data, timestamp, batch_id) VALUES ('x', 'a', -1, 'x', '{}', 'now', 1)").execute(&pool).await.is_err());
+    assert_eq!(store.read_global(0, 10).await.unwrap().len(), 1);
 }

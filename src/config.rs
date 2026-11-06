@@ -19,7 +19,7 @@ pub struct Config {
     pub host: IpAddr,
     #[arg(long, env = "EVENTSTORE_PORT", default_value_t = 8080)]
     pub port: u16,
-    #[arg(long, env = "EVENTSTORE_DATABASE", default_value = "./data/events.db")]
+    #[arg(long, env = "EVENTSTORE_DATABASE", default_value = "")]
     pub database: String,
     #[arg(long, env = "EVENTSTORE_API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
@@ -64,8 +64,9 @@ impl Config {
         if self.max_batch_size > 10_000 || self.max_body_size > 256 * 1024 * 1024 {
             return Err("maximum batch size is 10000 and maximum body size is 256 MiB".into());
         }
-        if self.database.is_empty() {
-            return Err("database path must not be empty".into());
+        if !self.database.starts_with("postgres://") && !self.database.starts_with("postgresql://")
+        {
+            return Err("database must be a PostgreSQL URL (postgres:// or postgresql://)".into());
         }
         Ok(())
     }
@@ -96,5 +97,30 @@ mod tests {
         let output = format!("{command:?}");
         assert!(!output.contains("api-secret"));
         assert!(!output.contains("database-secret"));
+    }
+
+    #[test]
+    fn database_requires_a_postgresql_url() {
+        let mut config = Config {
+            host: "127.0.0.1".parse().unwrap(),
+            port: 8080,
+            database: String::new(),
+            api_key: None,
+            log_level: "info".into(),
+            max_event_size: 1024,
+            max_batch_size: 10,
+            max_body_size: 4096,
+        };
+        for value in ["", "./data/events.db", "sqlite::memory:"] {
+            config.database = value.into();
+            assert!(config.validate().is_err(), "{value}");
+        }
+        for value in [
+            "postgres://localhost/events",
+            "postgresql://localhost/events",
+        ] {
+            config.database = value.into();
+            assert!(config.validate().is_ok(), "{value}");
+        }
     }
 }
