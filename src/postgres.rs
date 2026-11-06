@@ -59,9 +59,13 @@ impl PostgresStorage {
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;
-        let existing = sqlx::query("SELECT b.stream, b.event_ids, b.contents, b.revision, b.first_position, b.last_position FROM events e JOIN batches b ON b.id = e.batch_id WHERE e.id = $1")
-            .bind(&ids[0]).fetch_optional(&mut *tx).await.map_err(db_error)?;
+        let existing = sqlx::query("SELECT e.id, b.stream, b.event_ids, b.contents, b.revision, b.first_position, b.last_position FROM events e JOIN batches b ON b.id = e.batch_id WHERE e.id = ANY($1) ORDER BY (e.id = $2) DESC LIMIT 1")
+            .bind(ids).bind(&ids[0]).fetch_optional(&mut *tx).await.map_err(db_error)?;
         if let Some(row) = existing {
+            let existing_id: String = row.try_get("id").map_err(db_error)?;
+            if existing_id != ids[0] {
+                return Err(StoreError::DuplicateEventId);
+            }
             let previous_ids: String = row.try_get("event_ids").map_err(db_error)?;
             if previous_ids != *ids_json {
                 return Err(StoreError::DuplicateEventId);
@@ -77,17 +81,6 @@ impl PostgresStorage {
                 first_position: row.try_get("first_position").map_err(db_error)?,
                 last_position: row.try_get("last_position").map_err(db_error)?,
             });
-        }
-        if ids.len() > 1 {
-            let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM events WHERE id = ANY($1))")
-                    .bind(&ids[1..])
-                    .fetch_one(&mut *tx)
-                    .await
-                    .map_err(db_error)?;
-            if exists {
-                return Err(StoreError::DuplicateEventId);
-            }
         }
         let actual: Option<i64> =
             sqlx::query_scalar("SELECT MAX(revision) FROM events WHERE stream = $1")
@@ -106,24 +99,36 @@ impl PostgresStorage {
             .ok_or(StoreError::Internal)?;
         let batch_id: i64 = sqlx::query_scalar("INSERT INTO batches (stream, event_ids, contents, revision, first_position, last_position) VALUES ($1, $2, $3, $4, 0, 0) RETURNING id")
             .bind(stream).bind(ids_json).bind(contents).bind(last_revision).fetch_one(&mut *tx).await.map_err(db_error)?;
-        let mut first_position = 0;
-        let mut last_position = 0;
-        for (index, event) in req.events.iter().enumerate() {
-            let data = serde_json::to_string(&event.data).map_err(|_| StoreError::Internal)?;
-            let metadata = event
-                .metadata
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(|_| StoreError::Internal)?;
-            let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-            last_position = sqlx::query_scalar("INSERT INTO events (id, stream, revision, event_type, data, metadata, timestamp, batch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING position")
-                .bind(&ids[index]).bind(stream).bind(initial + index as i64 + 1).bind(&event.event_type)
-                .bind(data).bind(metadata).bind(timestamp).bind(batch_id).fetch_one(&mut *tx).await.map_err(db_error)?;
-            if index == 0 {
-                first_position = last_position;
-            }
+        let mut types = Vec::with_capacity(req.events.len());
+        let mut data = Vec::with_capacity(req.events.len());
+        let mut metadata = Vec::with_capacity(req.events.len());
+        let mut timestamps = Vec::with_capacity(req.events.len());
+        for event in &req.events {
+            types.push(event.event_type.as_str());
+            data.push(serde_json::to_string(&event.data).map_err(|_| StoreError::Internal)?);
+            metadata.push(
+                event
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|_| StoreError::Internal)?,
+            );
+            timestamps.push(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
         }
+        // The ordering lock and ordered input preserve revision/position order across batches.
+        let (first_position, last_position): (Option<i64>, Option<i64>) = sqlx::query_as(
+            "WITH inserted AS (INSERT INTO events (id, stream, revision, event_type, data, metadata, timestamp, batch_id) \
+             SELECT id, $6, $7 + ordinal, event_type, data, metadata, timestamp, $8 \
+             FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[]) WITH ORDINALITY \
+             AS input(id, event_type, data, metadata, timestamp, ordinal) ORDER BY ordinal RETURNING position) \
+             SELECT min(position), max(position) FROM inserted",
+        )
+        .bind(ids).bind(&types).bind(&data).bind(&metadata).bind(&timestamps)
+        .bind(stream).bind(initial).bind(batch_id)
+        .fetch_one(&mut *tx).await.map_err(db_error)?;
+        let first_position = first_position.ok_or(StoreError::Internal)?;
+        let last_position = last_position.ok_or(StoreError::Internal)?;
         sqlx::query("UPDATE batches SET first_position = $1, last_position = $2 WHERE id = $3")
             .bind(first_position)
             .bind(last_position)

@@ -136,7 +136,7 @@ async fn terminated_connection_rolls_back_partial_batch_and_allows_retry(pool: s
     // the transaction has already inserted the first event before interruption.
     let pid = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let pid: Option<i32> = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep' AND query LIKE 'INSERT INTO events %'")
+            let pid: Option<i32> = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep' AND query LIKE '%INSERT INTO events %'")
                 .fetch_optional(&pool).await.unwrap();
             if let Some(pid) = pid {
                 break pid;
@@ -216,6 +216,36 @@ async fn retry_after_advance_is_exact_and_conflicting_reuse_never_writes(pool: s
             .revision,
         5
     );
+}
+
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn bulk_append_preserves_order_content_and_retry_for_large_batch(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool);
+    let ids: Vec<u128> = (1..=512).collect();
+    let mut request = batch(Some(-1), &ids);
+    for event in request.events.iter_mut().step_by(2) {
+        event.metadata = None;
+    }
+    let result = store.append("large", &request).await.unwrap();
+    let events = store.read_global(0, 1000).await.unwrap();
+    assert_eq!(events.len(), request.events.len());
+    for (index, (actual, expected)) in events.iter().zip(&request.events).enumerate() {
+        assert_eq!(actual.id, expected.id);
+        assert_eq!(actual.revision, index as i64);
+        assert_eq!(actual.event_type, expected.event_type);
+        assert_eq!(actual.data, expected.data);
+        assert_eq!(actual.metadata, expected.metadata);
+    }
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].position < pair[1].position)
+    );
+    assert_eq!(result.first_position, events.first().unwrap().position);
+    assert_eq!(result.last_position, events.last().unwrap().position);
+    assert_eq!(store.append("large", &request).await.unwrap(), result);
+    assert_eq!(store.read_global(0, 1000).await.unwrap().len(), 512);
 }
 
 #[sqlx::test(migrations = "./migrations-postgres")]
