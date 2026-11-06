@@ -19,7 +19,12 @@ pub struct Config {
     pub host: IpAddr,
     #[arg(long, env = "EVENTSTORE_PORT", default_value_t = 8080)]
     pub port: u16,
-    #[arg(long, env = "EVENTSTORE_DATABASE", default_value = "")]
+    #[arg(
+        long,
+        env = "EVENTSTORE_DATABASE",
+        default_value = "",
+        hide_env_values = true
+    )]
     pub database: String,
     #[arg(long, env = "EVENTSTORE_API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,

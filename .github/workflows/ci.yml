@@ -53,6 +53,8 @@ jobs:
         env:
           RECOVERY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventstore_test
         run: bash .github/scripts/recovery-test.sh
+      - name: Test recovery after PostgreSQL crash
+        run: bash .github/scripts/postgres-crash-test.sh
       - name: Build and smoke-test container
         run: |
           docker build -t eventstore-ci .

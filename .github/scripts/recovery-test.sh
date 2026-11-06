@@ -19,9 +19,11 @@ trap cleanup EXIT
 key=$(openssl rand -hex 24)
 random=$(openssl rand -hex 16)
 event_id="${random:0:8}-${random:8:4}-7${random:13:3}-8${random:17:3}-${random:20:12}"
+second_random=$(openssl rand -hex 16)
+second_event_id="${second_random:0:8}-${second_random:8:4}-7${second_random:13:3}-8${second_random:17:3}-${second_random:20:12}"
 stream="recovery-${random}"
 base="http://127.0.0.1:$port"
-body="{\"expected_revision\":-1,\"events\":[{\"id\":\"$event_id\",\"type\":\"Created\",\"data\":{\"test\":true}}]}"
+body="{\"expected_revision\":-1,\"events\":[{\"id\":\"$event_id\",\"type\":\"Created\",\"data\":{\"test\":true}},{\"id\":\"$second_event_id\",\"type\":\"Updated\",\"data\":{\"test\":false}}]}"
 curl_args=(--noproxy '*' --silent --show-error --fail --max-time 5)
 
 start_server() {
@@ -46,7 +48,31 @@ append() {
 }
 
 start_server
+if [[ -n ${RECOVERY_TEST_RETRY_FIXTURE:-} ]]; then
+    restored_stream=$(jq -er '.stream' "$RECOVERY_TEST_RETRY_FIXTURE")
+    restored_body=$(jq -ec '.body' "$RECOVERY_TEST_RETRY_FIXTURE")
+    restored_expected=$(jq -eS '.response' "$RECOVERY_TEST_RETRY_FIXTURE")
+    restored_response=$(curl "${curl_args[@]}" -X POST "$base/v1/streams/$restored_stream/events" \
+        -H "X-API-Key: $key" -H 'Content-Type: application/json' -d "$restored_body" | jq -S .)
+    test "$restored_expected" = "$restored_response"
+    restored_events=$(curl "${curl_args[@]}" -H "X-API-Key: $key" "$base/v1/streams/$restored_stream/events" | jq -S .)
+    jq -e --argjson ids "$(jq -ec '[.body.events[].id]' "$RECOVERY_TEST_RETRY_FIXTURE")" \
+        '[.events[].id] == $ids' <<< "$restored_events" > /dev/null
+
+    changed_body=$(jq -c '.events[0].data.test = false' <<< "$restored_body")
+    conflict=$(curl --noproxy '*' --silent --show-error --max-time 5 -w '\n%{http_code}' \
+        -X POST "$base/v1/streams/$restored_stream/events" -H "X-API-Key: $key" \
+        -H 'Content-Type: application/json' -d "$changed_body")
+    test "${conflict##*$'\n'}" = 409
+    jq -e '.error.code == "idempotency_conflict"' <<< "${conflict%$'\n'*}" > /dev/null
+    test "$restored_events" = "$(curl "${curl_args[@]}" -H "X-API-Key: $key" \
+        "$base/v1/streams/$restored_stream/events" | jq -S .)"
+fi
 before=$(append)
+if [[ -n ${RECOVERY_TEST_FIXTURE:-} ]]; then
+    jq -n --arg stream "$stream" --argjson body "$body" --argjson response "$before" \
+        '{stream: $stream, body: $body, response: $response}' > "$RECOVERY_TEST_FIXTURE"
+fi
 kill -KILL "$pid"
 wait "$pid" 2>/dev/null || true
 pid=
@@ -54,4 +80,5 @@ start_server
 after=$(append)
 test "$before" = "$after"
 curl "${curl_args[@]}" -H "X-API-Key: $key" "$base/v1/streams/$stream/events" |
-    jq -e --arg id "$event_id" '.events | length == 1 and .[0].id == $id' > /dev/null
+    jq -e --arg first "$event_id" --arg second "$second_event_id" \
+        '[.events[].id] == [$first, $second]' > /dev/null

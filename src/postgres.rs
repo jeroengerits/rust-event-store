@@ -48,6 +48,11 @@ impl PostgresStorage {
             contents,
         } = batch;
         let mut tx = self.pool.begin().await.map_err(db_error)?;
+        // Bound lock contention so blocked writers cannot occupy the pool indefinitely.
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
         // A global transaction lock makes sequence allocation and commits ordered across
         // every instance. Sequences alone do not guarantee commit order.
         sqlx::query("SELECT pg_advisory_xact_lock(721015812890071)")
@@ -73,10 +78,10 @@ impl PostgresStorage {
                 last_position: row.try_get("last_position").map_err(db_error)?,
             });
         }
-        for id in &ids[1..] {
+        if ids.len() > 1 {
             let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM events WHERE id = $1)")
-                    .bind(id)
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM events WHERE id = ANY($1))")
+                    .bind(&ids[1..])
                     .fetch_one(&mut *tx)
                     .await
                     .map_err(db_error)?;

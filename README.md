@@ -45,6 +45,6 @@ DATABASE_URL=postgres://user:password@localhost/eventstore_test \
   cargo test --locked --all-features --test api_contract --test storage_contract -- --ignored
 ```
 
-CI also smoke-tests Cloud-style PostgreSQL and Docker configurations and checks recovery after an application crash. These checks do not verify database failover, backup restoration, the Cloud proxy, or your deployment settings. See [storage](docs/storage.md#durability-validation) and [deployment](docs/deployment.md) for details.
+CI also smoke-tests Cloud-style PostgreSQL and Docker configurations, checks recovery after application and PostgreSQL process crashes, and exercises a local logical backup and restore. These checks do not verify power loss, database failover, your provider's backup process, the Cloud proxy, or your deployment settings. See [storage](docs/storage.md#durability-validation) and [deployment](docs/deployment.md) for details.
 
 For load testing, see [benchmarking](docs/benchmarking.md). It writes persistent events and should use a disposable database.

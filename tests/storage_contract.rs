@@ -7,6 +7,28 @@ use std::sync::Arc;
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn blocked_append_times_out_without_writing_and_can_retry(pool: sqlx::PgPool) {
+    let store = Storage::from_pool(pool.clone());
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(721015812890071)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let request = batch(Some(-1), &[100]);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        store.append("blocked", &request),
+    )
+    .await
+    .expect("append must not wait indefinitely");
+    assert!(matches!(result, Err(StoreError::Unavailable)));
+    blocker.rollback().await.unwrap();
+    assert!(store.read_global(0, 10).await.unwrap().is_empty());
+    assert_eq!(store.append("blocked", &request).await.unwrap().revision, 0);
+}
+
 fn event(id: u128) -> EventInput {
     EventInput {
         id: Uuid::from_u128(id),
@@ -91,6 +113,72 @@ async fn insert_failure_rolls_back_the_whole_batch_and_leaves_ids_reusable(pool:
     let result = store.append("atomic", &request).await.unwrap();
     assert_eq!(result.revision, 2);
     assert_eq!(store.read_global(0, 100).await.unwrap().len(), 3);
+}
+
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn terminated_connection_rolls_back_partial_batch_and_allows_retry(pool: sqlx::PgPool) {
+    use std::time::Duration;
+
+    sqlx::query("CREATE FUNCTION pause_second_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'pause' THEN PERFORM pg_sleep(30); END IF; RETURN NEW; END $$")
+        .execute(&pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER pause_second BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION pause_second_fn()")
+        .execute(&pool).await.unwrap();
+
+    let store = Storage::from_pool(pool.clone());
+    let mut request = batch(Some(-1), &[101, 102, 103]);
+    request.events[1].event_type = "pause".into();
+    let writer = store.clone();
+    let pending = request.clone();
+    let task = tokio::spawn(async move { writer.append("interrupted", &pending).await });
+
+    // The trigger sleeps only on the second insert, so observing PgSleep proves
+    // the transaction has already inserted the first event before interruption.
+    let pid = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let pid: Option<i32> = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep' AND query LIKE 'INSERT INTO events %'")
+                .fetch_optional(&pool).await.unwrap();
+            if let Some(pid) = pid {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("writer did not reach the second event");
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(pid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(terminated);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(store.read_global(0, 10).await.unwrap().is_empty());
+    let batches: i64 = sqlx::query_scalar("SELECT count(*) FROM batches")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(batches, 0);
+
+    sqlx::query("DROP TRIGGER pause_second ON events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .append("interrupted", &request)
+            .await
+            .unwrap()
+            .revision,
+        2
+    );
+    assert_eq!(store.read_global(0, 10).await.unwrap().len(), 3);
 }
 
 #[sqlx::test(migrations = "./migrations-postgres")]
