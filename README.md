@@ -26,6 +26,8 @@ Retry timed-out appends with the same IDs and content. For paginated reads, cont
 
 Subscriptions deliver events at least once. Persist a processing checkpoint and reconnect from it; send at most one `Last-Event-ID` header to avoid an ambiguous replay position.
 
+The separate macOS Event Store Workspace client can connect to this server over HTTP or HTTPS using the same API key. Its Timeline uses paginated global reads and polls for new events; it is an interactive, in-memory view rather than a durable subscription consumer. See the client repository's README for setup and limitations.
+
 The scripts in `scripts/` wrap the HTTP endpoints. Set `EVENTSTORE_URL` and, if needed, `EVENTSTORE_API_KEY`; scripts accepting arguments provide `--help`.
 
 ## Test

@@ -8,4 +8,6 @@ Use `after` as an exclusive position (default 0); `Last-Event-ID`, when present,
 
 Use an SSE-capable client, reconnect with backoff, and configure intermediaries for long-lived unbuffered responses. Automatic `Last-Event-ID` handling tracks received events, which may be ahead of a durable processing checkpoint: reconnect from the latter to avoid loss. The server does not promise exactly-once processing or durable server-side consumer groups.
 
+The macOS Event Store Workspace Timeline uses paginated `GET /v1/events` reads and periodic polling, not this SSE endpoint. Its in-memory position is for display and is not a durable processing checkpoint.
+
 The feed uses bounded database fetches and transport backpressure rather than an unbounded per-subscriber event queue. There is currently no promised slow-consumer disconnect timeout: a stalled connection may remain open until the client, network, proxy, or server closes it. On shutdown the server allows ten seconds for connections to drain, then exits and closes any remaining connections.
