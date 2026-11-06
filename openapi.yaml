@@ -31,6 +31,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
   /v1/streams/{stream}/events:
@@ -97,6 +99,8 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
   /v1/events:
@@ -115,6 +119,8 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '500':
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
