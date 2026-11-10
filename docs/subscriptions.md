@@ -11,3 +11,5 @@ Use an SSE-capable client, reconnect with backoff, and configure intermediaries 
 The macOS Event Store Workspace Timeline uses paginated `GET /v1/events` reads and periodic polling, not this SSE endpoint. Its in-memory position is for display and is not a durable processing checkpoint.
 
 The feed uses bounded database fetches and transport backpressure rather than an unbounded per-subscriber event queue. There is currently no promised slow-consumer disconnect timeout: a stalled connection may remain open until the client, network, proxy, or server closes it. On shutdown the server allows ten seconds for connections to drain, then exits and closes any remaining connections.
+
+Server logs record subscription starts and closes with the process-local active count, and the start and recovery of a database-read failure with its cursor and retry duration. An open connection is not proof that storage is currently healthy; use `/ready` and monitor these logs. Event payloads and credentials are not included in these subscription lifecycle logs.

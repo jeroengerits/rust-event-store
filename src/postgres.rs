@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{AppendRequest, AppendResult, Event},
-    storage::{PreparedBatch, StoreError, collect_page, db_error},
+    storage::{
+        AppendOutcome, GlobalPosition, PreparedBatch, StoreError, StreamCursor, collect_page,
+        db_error,
+    },
 };
 
 #[derive(Clone)]
@@ -41,7 +44,7 @@ impl PostgresStorage {
         stream: &str,
         req: &AppendRequest,
         batch: &PreparedBatch,
-    ) -> Result<AppendResult, StoreError> {
+    ) -> Result<AppendOutcome, StoreError> {
         let PreparedBatch {
             ids,
             ids_json,
@@ -75,12 +78,12 @@ impl PostgresStorage {
             if previous_stream != stream || previous_contents != *contents {
                 return Err(StoreError::IdempotencyConflict);
             }
-            return Ok(AppendResult {
+            return Ok(AppendOutcome::Replayed(AppendResult {
                 stream: previous_stream,
                 revision: row.try_get("revision").map_err(db_error)?,
                 first_position: row.try_get("first_position").map_err(db_error)?,
                 last_position: row.try_get("last_position").map_err(db_error)?,
-            });
+            }));
         }
         let actual: Option<i64> =
             sqlx::query_scalar("SELECT MAX(revision) FROM events WHERE stream = $1")
@@ -137,30 +140,34 @@ impl PostgresStorage {
             .await
             .map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
-        Ok(AppendResult {
+        Ok(AppendOutcome::Committed(AppendResult {
             stream: stream.to_owned(),
             revision: last_revision,
             first_position,
             last_position,
-        })
+        }))
     }
 
     pub async fn read_stream(
         &self,
         stream: &str,
-        from: Option<i64>,
+        cursor: StreamCursor,
         limit: i64,
-        backward: bool,
     ) -> Result<Vec<Event>, StoreError> {
-        let sql = if backward {
-            "SELECT * FROM events WHERE stream = $1 AND revision <= $2 ORDER BY revision DESC LIMIT $3"
-        } else {
-            "SELECT * FROM events WHERE stream = $1 AND revision >= $2 ORDER BY revision ASC LIMIT $3"
+        let (sql, from) = match cursor {
+            StreamCursor::Backward(from) => (
+                "SELECT * FROM events WHERE stream = $1 AND revision <= $2 ORDER BY revision DESC LIMIT $3",
+                from.map(|revision| revision.0).unwrap_or(i64::MAX),
+            ),
+            StreamCursor::Forward(from) => (
+                "SELECT * FROM events WHERE stream = $1 AND revision >= $2 ORDER BY revision ASC LIMIT $3",
+                from.map(|revision| revision.0).unwrap_or(0),
+            ),
         };
         collect_page(
             sqlx::query(sql)
                 .bind(stream)
-                .bind(from.unwrap_or(if backward { i64::MAX } else { 0 }))
+                .bind(from)
                 .bind(limit)
                 .fetch(&self.pool),
             decode_event,
@@ -168,10 +175,14 @@ impl PostgresStorage {
         .await
     }
 
-    pub async fn read_global(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
+    pub async fn read_global(
+        &self,
+        after: GlobalPosition,
+        limit: i64,
+    ) -> Result<Vec<Event>, StoreError> {
         collect_page(
             sqlx::query("SELECT * FROM events WHERE position > $1 ORDER BY position ASC LIMIT $2")
-                .bind(after)
+                .bind(after.0)
                 .bind(limit)
                 .fetch(&self.pool),
             decode_event,

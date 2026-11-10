@@ -8,6 +8,14 @@ Append transactions use a five-second PostgreSQL lock timeout. If a lock cannot 
 
 Use your PostgreSQL provider's backup and restore procedures, configure durability appropriate for your data, and regularly test recovery. After restoring, check readiness, expected events and consumer checkpoints. Restoring an older snapshot rolls back history; downstream checkpoints beyond it need reconciliation.
 
+### Reconcile consumers after a restore
+
+1. Stop or pause writers and consumers while assessing the restored database. Keep the original backup and consumer checkpoint records.
+2. Check `/ready`, verify representative streams and global positions, and confirm the restore includes both events and batches. Test an exact retry against a known restored batch where safe.
+3. Compare each durable consumer checkpoint with the restored history. A checkpoint beyond the restored history can cause a consumer to skip new events until positions exceed that checkpoint. Even a checkpoint within the restored range may refer to a different history after divergent writes; compare known event IDs, not positions alone.
+4. Choose a verified checkpoint common to the restored history and each consumer's processed state. Rewind or rebuild the consumer as appropriate, and reconcile downstream side effects; replay can duplicate effects unless handlers are idempotent or processing and checkpointing are atomic.
+5. Resume from the reconciled durable checkpoint, validate replay and new appends, then resume normal traffic. Do not reset production checkpoints blindly: the right recovery point depends on the consumer and its external effects.
+
 ## Upgrades
 
 Back up and test restoration before upgrading. Test the new binary and migrations against a copy first, review release-specific migration and rollback instructions, and consider compatibility between old and new instances. Startup runs embedded PostgreSQL migrations. Do not assume downgrades or simultaneous mixed-version writers are safe. Keep the pre-upgrade backup until validation is complete.

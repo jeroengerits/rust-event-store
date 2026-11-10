@@ -357,3 +357,139 @@ async fn subscription_replays_after_last_event_id_and_closes_on_shutdown(pool: s
             .is_none()
     );
 }
+
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn subscription_polls_for_writes_from_another_storage_instance(pool: sqlx::PgPool) {
+    use eventstore::domain::{AppendRequest, EventInput};
+    use std::time::Duration;
+
+    let reader = Storage::from_pool(pool.clone());
+    let writer = Storage::from_pool(pool);
+    let shutdown = CancellationToken::new();
+    let app = api::router(reader, config(), shutdown.clone());
+    let request = Request::builder()
+        .uri("/v1/subscriptions?after=0")
+        .header("x-api-key", "secret")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    // Poll the response before writing so the subscriber has started its idle query.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), body.frame())
+            .await
+            .is_err()
+    );
+    let result = writer
+        .append(
+            "separate",
+            &AppendRequest {
+                expected_revision: Some(-1),
+                events: vec![EventInput {
+                    id: Uuid::now_v7(),
+                    event_type: "created".into(),
+                    data: json!(1),
+                    metadata: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+    assert!(
+        text.contains(&format!("id: {}", result.last_position)),
+        "{text}"
+    );
+    shutdown.cancel();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations-postgres")]
+#[ignore = "requires DATABASE_URL pointing to a disposable PostgreSQL server with CREATE DATABASE privileges"]
+async fn subscription_recovers_after_read_failure_and_stops_while_retrying(pool: sqlx::PgPool) {
+    use eventstore::domain::{AppendRequest, EventInput};
+    use std::time::Duration;
+
+    let store = Storage::from_pool(pool.clone());
+    let shutdown = CancellationToken::new();
+    let app = api::router(store.clone(), config(), shutdown.clone());
+    let request = Request::builder()
+        .uri("/v1/subscriptions?after=0")
+        .header("x-api-key", "secret")
+        .body(Body::empty())
+        .unwrap();
+    let mut body = app.oneshot(request).await.unwrap().into_body();
+
+    // Rename the table only in this isolated test database to force reads to fail.
+    sqlx::query("ALTER TABLE events RENAME TO unavailable_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), body.frame())
+            .await
+            .is_err()
+    );
+    sqlx::query("ALTER TABLE unavailable_events RENAME TO events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let result = store
+        .append(
+            "recovery",
+            &AppendRequest {
+                expected_revision: Some(-1),
+                events: vec![EventInput {
+                    id: Uuid::now_v7(),
+                    event_type: "created".into(),
+                    data: json!(1),
+                    metadata: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+    assert!(
+        text.contains(&format!("id: {}", result.last_position)),
+        "{text}"
+    );
+
+    sqlx::query("ALTER TABLE events RENAME TO unavailable_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), body.frame())
+            .await
+            .is_err()
+    );
+    shutdown.cancel();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("ALTER TABLE unavailable_events RENAME TO events")
+        .execute(&pool)
+        .await
+        .unwrap();
+}

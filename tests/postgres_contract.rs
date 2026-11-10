@@ -30,7 +30,15 @@ async fn postgres_read_pages_respect_byte_budget_and_make_progress() {
     let mut oversized = request(None).events.remove(0);
     oversized.data = json!("c".repeat(4_300_000));
     batch.events.extend([second, oversized]);
-    store.append(&stream, &batch).await.unwrap();
+    let result = store.append(&stream, &batch).await.unwrap();
+
+    let mut after = result.first_position - 1;
+    for event in &batch.events {
+        let page = store.read_global(after, 10).await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, event.id);
+        after = page[0].position;
+    }
 
     for revision in 0..3 {
         let page = store

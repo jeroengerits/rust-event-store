@@ -1,4 +1,11 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use async_stream::stream;
 use axum::{
@@ -32,6 +39,26 @@ struct AppState {
 }
 
 type Shared = Arc<AppState>;
+
+static ACTIVE_SUBSCRIPTIONS: AtomicUsize = AtomicUsize::new(0);
+
+// Dropping the response body also drops this guard, even when the client disconnects.
+struct SubscriptionGuard;
+
+impl SubscriptionGuard {
+    fn new() -> Self {
+        let active = ACTIVE_SUBSCRIPTIONS.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::info!(active, "subscription started");
+        Self
+    }
+}
+
+impl Drop for SubscriptionGuard {
+    fn drop(&mut self) {
+        let active = ACTIVE_SUBSCRIPTIONS.fetch_sub(1, Ordering::Relaxed) - 1;
+        tracing::info!(active, "subscription closed");
+    }
+}
 
 pub fn router(storage: Storage, config: Config, shutdown: CancellationToken) -> Router {
     let max_body_size = config.max_body_size;
@@ -422,6 +449,8 @@ async fn subscribe(
         );
     }
     let output = stream! {
+        let _guard = SubscriptionGuard::new();
+        let mut failing_since: Option<Instant> = None;
         'subscription: loop {
             // Register before querying to avoid losing a wakeup between the query and wait.
             let notified = state.storage.notify.notified();
@@ -431,6 +460,9 @@ async fn subscribe(
                 _ = state.shutdown.cancelled() => break,
                 result = state.storage.read_global(cursor, limit) => result,
             };
+            if result.is_ok() && let Some(started) = failing_since.take() {
+                tracing::info!(cursor, retry_seconds = started.elapsed().as_secs_f64(), "subscription storage recovered");
+            }
             match result {
                 Ok(events) if !events.is_empty() => {
                     for event in events {
@@ -450,6 +482,10 @@ async fn subscribe(
                 }
                 Err(_) => {
                     // Avoid exposing storage internals and retry with a bounded delay.
+                    if failing_since.is_none() {
+                        failing_since = Some(Instant::now());
+                        tracing::warn!(cursor, "subscription storage read failed; retrying");
+                    }
                     tokio::select! {
                         _ = state.shutdown.cancelled() => break,
                         _ = tokio::time::sleep(Duration::from_secs(2)) => {},

@@ -81,6 +81,25 @@ pub(crate) struct PreparedBatch {
     pub(crate) contents: String,
 }
 
+/// An exclusive global position: reads return events strictly after this value.
+#[derive(Clone, Copy)]
+pub(crate) struct GlobalPosition(pub(crate) i64);
+
+/// An inclusive stream revision. The direction determines ordering and the default bound.
+#[derive(Clone, Copy)]
+pub(crate) struct StreamRevision(pub(crate) i64);
+
+#[derive(Clone, Copy)]
+pub(crate) enum StreamCursor {
+    Forward(Option<StreamRevision>),
+    Backward(Option<StreamRevision>),
+}
+
+pub(crate) enum AppendOutcome {
+    Committed(AppendResult),
+    Replayed(AppendResult),
+}
+
 fn prepare_batch(req: &AppendRequest) -> Result<PreparedBatch, StoreError> {
     if req.events.is_empty() {
         return Err(StoreError::Internal);
@@ -122,7 +141,17 @@ impl Storage {
         req: &AppendRequest,
     ) -> Result<AppendResult, StoreError> {
         let batch = prepare_batch(req)?;
-        let result = self.postgres.append(stream, req, &batch).await?;
+        let outcome = self.postgres.append(stream, req, &batch).await?;
+        let result = match outcome {
+            AppendOutcome::Committed(result) => {
+                tracing::debug!("append committed");
+                result
+            }
+            AppendOutcome::Replayed(result) => {
+                tracing::debug!("append replayed");
+                result
+            }
+        };
         self.notify.notify_waiters();
         Ok(result)
     }
@@ -134,13 +163,18 @@ impl Storage {
         limit: i64,
         backward: bool,
     ) -> Result<Vec<Event>, StoreError> {
-        self.postgres
-            .read_stream(stream, from, limit, backward)
-            .await
+        let cursor = if backward {
+            StreamCursor::Backward(from.map(StreamRevision))
+        } else {
+            StreamCursor::Forward(from.map(StreamRevision))
+        };
+        self.postgres.read_stream(stream, cursor, limit).await
     }
 
     pub async fn read_global(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
-        self.postgres.read_global(after, limit).await
+        self.postgres
+            .read_global(GlobalPosition(after), limit)
+            .await
     }
 
     pub async fn ready(&self) -> Result<(), StoreError> {

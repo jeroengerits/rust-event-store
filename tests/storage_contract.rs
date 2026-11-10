@@ -189,6 +189,12 @@ async fn retry_after_advance_is_exact_and_conflicting_reuse_never_writes(pool: s
     let first = store.append("a", &original).await.unwrap();
     store.append("a", &batch(Some(2), &[4])).await.unwrap();
     assert_eq!(store.append("a", &original).await.unwrap(), first);
+    let mut changed_precondition = original.clone();
+    changed_precondition.expected_revision = Some(999);
+    assert_eq!(
+        store.append("a", &changed_precondition).await.unwrap(),
+        first
+    );
     let mut changed = original.clone();
     changed.events[2].data = json!({"different": true});
     assert!(matches!(
